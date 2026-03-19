@@ -12,6 +12,8 @@
  */
 
 const DEFAULT_ELEVENLABS_KEY = "";
+const KOKORO_BASE_URL = "http://127.0.0.1:8881";
+const KOKORO_REQUEST_TIMEOUT_MS = 60000;
 
 // ─── Playback state ───────────────────────────────────────────────────────────
 
@@ -38,7 +40,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         switch (engine) {
           case "edge":       speakWithEdgeTTS(text, voice, speed);       break;
           case "openai":     speakWithOpenAI(text, voice, speed, apiKey); break;
-          case "elevenlabs": speakWithElevenLabs(text, voice, apiKey);    break;
+          case "elevenlabs": speakWithElevenLabs(text, voice, speed, apiKey); break;
+          case "kokoro":     speakWithKokoro(text, voice, speed);        break;
           default:           speakWithLocalTTS(text, voice, speed);       break;
         }
         sendResponse({ ok: true });
@@ -114,8 +117,62 @@ function playAudioBlob(blob, playbackRate = 1.0) {
       currentAudio = null;
       reject(new Error("Audio playback error"));
     };
-    audio.play().catch(reject);
+    audio.play().catch((error) => {
+      URL.revokeObjectURL(url);
+      currentAudio = null;
+      reject(error);
+    });
   });
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function readResponseError(res) {
+  const fallback = [res.statusText, `HTTP ${res.status}`].filter(Boolean).join(": ");
+
+  try {
+    const raw = (await res.text()).trim();
+    if (!raw) return fallback;
+
+    try {
+      const data = JSON.parse(raw);
+      const code = [
+        data?.error?.code,
+        data?.error?.type,
+        data?.detail?.status,
+        data?.code,
+      ].find((value) => typeof value === "string" && value.trim());
+      const message = [
+        data?.error?.message,
+        data?.detail?.message,
+        data?.message,
+        typeof data?.detail === "string" ? data.detail : "",
+      ].find((value) => typeof value === "string" && value.trim());
+
+      if (code && message && !message.toLowerCase().includes(code.toLowerCase())) {
+        return `${code}: ${message}`;
+      }
+      return message || code || raw;
+    } catch {
+      return raw;
+    }
+  } catch {
+    return fallback;
+  }
 }
 
 // ─── Edge TTS (StreamElements primary, Bing fallback) ────────────────────────
@@ -202,6 +259,14 @@ function escapeXml(str) {
     .replace(/'/g, "&apos;");
 }
 
+function splitIntoSentences(text) {
+  const input = (text || "").trim();
+  if (!input) return [];
+  return (input.match(/[^.!?]+(?:[.!?]+|$)/g) || [input])
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
 // Voice → Google Translate language code mapping
 const EDGE_GTTS_LANG_MAP = {
   "en-GB-SoniaNeural":   "en-GB",
@@ -219,14 +284,15 @@ async function edgeTTSChunkViaGoogle(voiceName, text) {
   const lang = EDGE_GTTS_LANG_MAP[voiceName] || "en-GB";
   // Split text into ~180 char sentence-aware chunks for Google's limit
   const miniChunks = [];
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+  const sentences = splitIntoSentences(text);
   let current = "";
   for (const s of sentences) {
-    if ((current + s).length > 180) {
+    const next = current ? `${current} ${s}` : s;
+    if (next.length > 180) {
       if (current) miniChunks.push(current.trim());
       current = s;
     } else {
-      current += s;
+      current = next;
     }
   }
   if (current.trim()) miniChunks.push(current.trim());
@@ -397,7 +463,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey) {
       });
 
       if (!res.ok) {
-        const msg = await res.text().catch(() => res.statusText);
+        const msg = await readResponseError(res);
         throw new Error(`OpenAI API ${res.status}: ${msg}`);
       }
 
@@ -426,10 +492,15 @@ async function speakWithOpenAI(text, voice, speed, apiKey) {
 
 // ─── ElevenLabs TTS ───────────────────────────────────────────────────────────
 
-async function speakWithElevenLabs(text, voice, apiKey) {
+async function speakWithElevenLabs(text, voice, speed, apiKey) {
   const effectiveKey   = (apiKey && apiKey.trim()) || DEFAULT_ELEVENLABS_KEY;
   const effectiveVoice = voice || "21m00Tcm4TlvDq8ikWAM"; // Rachel
   const chunks         = splitText(text, 2500);
+
+  if (!effectiveKey) {
+    reportState("stopped", "ElevenLabs API key required — add it in Settings");
+    return;
+  }
 
   for (let i = 0; i < chunks.length; i++) {
     if (isStopped) return;
@@ -459,7 +530,8 @@ async function speakWithElevenLabs(text, voice, apiKey) {
       );
 
       if (!res.ok) {
-        throw new Error(`ElevenLabs API ${res.status}: ${res.statusText}`);
+        const msg = await readResponseError(res);
+        throw new Error(`ElevenLabs API ${res.status}: ${msg}`);
       }
 
       const blob = await res.blob();
@@ -469,7 +541,7 @@ async function speakWithElevenLabs(text, voice, apiKey) {
         chunk: i + 1, totalChunks: chunks.length, engine: "elevenlabs",
       });
 
-      await playAudioBlob(blob);
+      await playAudioBlob(blob, speed || 1.0);
 
       while (isPaused && !isStopped) { await sleep(100); }
     } catch (err) {
@@ -495,7 +567,7 @@ function speakWithLocalTTS(text, voiceName, speed) {
 
   speechSynthesis.cancel();
 
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+  const sentences = splitIntoSentences(text);
   let   index     = 0;
 
   reportState("playing", "Reading…", {
@@ -546,7 +618,7 @@ function speakWithLocalTTS(text, voiceName, speed) {
 
 function splitText(text, maxLen) {
   const chunks    = [];
-  const sentences = text.match(/[^.!?]+[.!?]+[\s]*/g) || [text];
+  const sentences = splitIntoSentences(text);
   let   chunk     = "";
 
   for (const s of sentences) {
@@ -555,11 +627,11 @@ function splitText(text, maxLen) {
       if (chunk) { chunks.push(chunk.trim()); chunk = ""; }
       const parts = s.match(new RegExp(`.{1,${maxLen}}`, "g")) || [s];
       parts.forEach((p) => chunks.push(p.trim()));
-    } else if ((chunk + s).length > maxLen) {
+    } else if ((chunk ? `${chunk} ${s}` : s).length > maxLen) {
       if (chunk) chunks.push(chunk.trim());
       chunk = s;
     } else {
-      chunk += s;
+      chunk = chunk ? `${chunk} ${s}` : s;
     }
   }
 
@@ -571,4 +643,55 @@ function splitText(text, maxLen) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function speakWithKokoro(text, voice, speedRate) {
+  const effectiveVoice = voice || "af_heart"; // default Kokoro voice
+  const chunks = splitText(text, 2500); // 2500 chars per chunk is fine
+  const safeSpeed = Math.min(3.0, Math.max(0.5, speedRate || 1.0));
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (isStopped) return;
+    while (isPaused && !isStopped) { await sleep(100); }
+    if (isStopped) return;
+
+    reportState("playing", `Fetching Kokoro audio… ${i + 1}/${chunks.length}`, {
+      chunk: i + 1, totalChunks: chunks.length, engine: "kokoro",
+    });
+
+    try {
+      const res = await fetchWithTimeout(`${KOKORO_BASE_URL}/v1/text-to-speech/${effectiveVoice}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: chunks[i], speed: safeSpeed }),
+      }, KOKORO_REQUEST_TIMEOUT_MS);
+
+      if (!res.ok) {
+        throw new Error(`Kokoro API ${res.status}: ${res.statusText}`);
+      }
+
+      const blob = await res.blob();
+      if (isStopped) return;
+
+      reportState("playing", `Playing… ${i + 1}/${chunks.length}`, {
+        chunk: i + 1, totalChunks: chunks.length, engine: "kokoro",
+      });
+
+      await playAudioBlob(blob, speedRate);
+      if (isStopped) return;
+    } catch (err) {
+      if (isStopped) return;
+      const message = err?.message && /Failed to fetch/i.test(err.message)
+        ? `Kokoro server unavailable at ${KOKORO_BASE_URL} — start kokoro_server.py first`
+        : err?.message && /timed out/i.test(err.message)
+          ? `Kokoro request timed out after ${Math.round(KOKORO_REQUEST_TIMEOUT_MS / 1000)}s`
+        : `Kokoro error: ${err.message}`;
+      reportState("stopped", message);
+      return;
+    }
+  }
+
+  if (!isStopped) {
+    reportState("stopped", "Finished");
+  }
 }

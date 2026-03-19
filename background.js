@@ -22,8 +22,11 @@ let _state = { state: "stopped", statusText: "", chunk: 0, totalChunks: 0, engin
 let _activeTabId = null;
 
 async function loadState() {
-  const stored = await chrome.storage.session.get("playbackState").catch(() => ({}));
+  const stored = await chrome.storage.session
+    .get(["playbackState", "activeTabId"])
+    .catch(() => ({}));
   if (stored.playbackState) _state = stored.playbackState;
+  if (typeof stored.activeTabId === "number") _activeTabId = stored.activeTabId;
   return _state;
 }
 
@@ -31,6 +34,11 @@ async function saveState(patch) {
   _state = { ..._state, ...patch };
   await chrome.storage.session.set({ playbackState: _state }).catch(() => {});
   return _state;
+}
+
+async function saveActiveTabId(tabId) {
+  _activeTabId = typeof tabId === "number" ? tabId : null;
+  await chrome.storage.session.set({ activeTabId: _activeTabId }).catch(() => {});
 }
 
 // ─── Offscreen Helpers ─────────────────────────────────────────────────────────
@@ -61,9 +69,18 @@ async function closeOffscreenDocument() {
 
 // ─── Content Script Notifications ─────────────────────────────────────────────
 
-function notifyContentScript(tabId, payload) {
-  if (!tabId) return;
-  chrome.tabs.sendMessage(tabId, { target: "content", type: "playerUpdate", payload }).catch(() => {});
+async function notifyContentScript(tabId, payload) {
+  let targetTabId = tabId;
+
+  if (typeof targetTabId !== "number") {
+    const stored = await chrome.storage.session.get("activeTabId").catch(() => ({}));
+    targetTabId = stored.activeTabId;
+  }
+
+  if (typeof targetTabId !== "number") return;
+
+  _activeTabId = targetTabId;
+  chrome.tabs.sendMessage(targetTabId, { target: "content", type: "playerUpdate", payload }).catch(() => {});
 }
 
 // ─── Message Router ────────────────────────────────────────────────────────────
@@ -87,8 +104,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // ── Start playback ───────────────────────────────────────────────────
       case "play": {
-        if (message.payload?.tabId) {
-          _activeTabId = message.payload.tabId;
+        if (typeof message.payload?.tabId === "number") {
+          await saveActiveTabId(message.payload.tabId);
         }
         await saveState({ state: "playing", statusText: "Starting…", engine: message.payload?.engine || "edge" });
         await ensureOffscreenDocument();
@@ -98,7 +115,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           payload: message.payload,
         }).catch(() => {});
         // Notify content script to show mini-player
-        notifyContentScript(_activeTabId, { state: "playing", chunk: 0, totalChunks: 0 });
+        await notifyContentScript(_activeTabId, { state: "playing", chunk: 0, totalChunks: 0 });
         sendResponse({ ok: true });
         break;
       }
@@ -107,7 +124,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "pause": {
         await saveState({ state: "paused", statusText: "Paused" });
         chrome.runtime.sendMessage({ target: "offscreen", type: "pause" }).catch(() => {});
-        notifyContentScript(_activeTabId, { state: "paused", chunk: _state.chunk, totalChunks: _state.totalChunks });
+        await notifyContentScript(_activeTabId, { state: "paused", chunk: _state.chunk, totalChunks: _state.totalChunks });
         sendResponse({ ok: true });
         break;
       }
@@ -116,7 +133,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "resume": {
         await saveState({ state: "playing", statusText: _state.statusText });
         chrome.runtime.sendMessage({ target: "offscreen", type: "resume" }).catch(() => {});
-        notifyContentScript(_activeTabId, { state: "playing", chunk: _state.chunk, totalChunks: _state.totalChunks });
+        await notifyContentScript(_activeTabId, { state: "playing", chunk: _state.chunk, totalChunks: _state.totalChunks });
         sendResponse({ ok: true });
         break;
       }
@@ -125,7 +142,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "stop": {
         await saveState({ state: "stopped", statusText: "", chunk: 0, totalChunks: 0 });
         chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }).catch(() => {});
-        notifyContentScript(_activeTabId, { state: "stopped" });
+        await notifyContentScript(_activeTabId, { state: "stopped" });
         await sleep(250);
         await closeOffscreenDocument();
         sendResponse({ ok: true });
@@ -149,7 +166,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }).catch(() => {});
 
         // Forward to content script (floating player)
-        notifyContentScript(_activeTabId, {
+        await notifyContentScript(_activeTabId, {
           state:       updated.state,
           chunk:       updated.chunk || 0,
           totalChunks: updated.totalChunks || 0,

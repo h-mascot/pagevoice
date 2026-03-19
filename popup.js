@@ -23,6 +23,15 @@ const EDGE_VOICES = [
   { value: "en-AU-WilliamNeural", label: "Russell (AU Male)" },
 ];
 
+const KOKORO_VOICES = [
+  { value: "af_heart", label: "Heart (US Female)" },
+  { value: "af_bella", label: "Bella (US Female)" },
+  { value: "am_michael", label: "Michael (US Male)" },
+  { value: "bf_alice", label: "Alice (British Female)" },
+  { value: "bf_emma", label: "Emma (British Female)" },
+  { value: "bm_george", label: "George (British Male)" },
+];
+
 const OPENAI_VOICES = [
   { value: "nova",    label: "Nova (Female, Warm)" },
   { value: "alloy",  label: "Alloy (Neutral)" },
@@ -228,7 +237,13 @@ function updateEngineUI(engine) {
 }
 
 function engineDisplayName(engine) {
-  return { edge: "Edge TTS", local: "Browser TTS", openai: "OpenAI TTS", elevenlabs: "ElevenLabs" }[engine] || engine;
+  return {
+    edge: "Edge TTS",
+    local: "Browser TTS",
+    openai: "OpenAI TTS",
+    elevenlabs: "ElevenLabs",
+    kokoro: "Kokoro TTS",
+  }[engine] || engine;
 }
 
 // ─── Voice Population ─────────────────────────────────────────────────────────
@@ -248,6 +263,10 @@ function populateVoices(engine, savedVoice) {
     ELEVENLABS_VOICES.forEach(({ value, label }) => addOption(voiceSelect, value, label));
     restoreVoice(savedVoice || "21m00Tcm4TlvDq8ikWAM");
 
+  } else if (engine === "kokoro") {
+    KOKORO_VOICES.forEach(({ value, label }) => addOption(voiceSelect, value, label));
+    restoreVoice(savedVoice || "bf_alice");
+
   } else if (engine === "local") {
     loadLocalVoices(savedVoice);
   }
@@ -261,8 +280,10 @@ function addOption(select, value, label) {
 }
 
 function restoreVoice(voiceName) {
-  if (!voiceName) return;
-  voiceSelect.value = voiceName;
+  if (voiceName) voiceSelect.value = voiceName;
+  if (!voiceSelect.value && voiceSelect.options.length > 0) {
+    voiceSelect.selectedIndex = 0;
+  }
 }
 
 function loadLocalVoices(savedVoice) {
@@ -401,7 +422,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 function applyState({ state, statusText, chunk, totalChunks, engine }) {
   setUIState(state);
-  if (statusText !== undefined) setStatus(statusText);
+  if (statusText !== undefined) setStatus(statusText, statusLooksLikeError(state, statusText));
   if (chunk !== undefined && totalChunks !== undefined) {
     progressInfo.textContent = totalChunks > 1 ? `${chunk} / ${totalChunks}` : "";
   }
@@ -438,6 +459,12 @@ function setUIState(state) {
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
   statusEl.classList.toggle("error", isError);
+}
+
+function statusLooksLikeError(state, text) {
+  if (!text) return false;
+  if (state !== "stopped") return false;
+  return /(error|required|unavailable|timed out|failed|quota|unauthorized|forbidden|could not)/i.test(text);
 }
 
 function sleep(ms) {

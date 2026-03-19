@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PageVoice",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Read articles aloud — Edge TTS, OpenAI, ElevenLabs, or local TTS",
   "permissions": ["storage", "activeTab", "scripting", "offscreen", "tabs"],
   "host_permissions": [
@@ -9,7 +9,8 @@
     "https://api.openai.com/*",
     "https://api.streamelements.com/*",
     "https://translate.google.com/*",
-    "https://speech.platform.bing.com/*"
+    "https://speech.platform.bing.com/*",
+    "http://127.0.0.1:8881/*"
   ],
   "action": {
     "default_popup": "popup.html",

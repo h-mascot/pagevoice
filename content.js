@@ -127,11 +127,6 @@ function injectPlayer() {
   document.body.appendChild(playerEl);
   playerVisible = true;
 
-  playerEl.querySelector(".pv-play").addEventListener("click", (e) => {
-    e.stopPropagation();
-    chrome.runtime.sendMessage({ target: "background", type: "pause" });
-  });
-
   playerEl.querySelector(".pv-stop").addEventListener("click", (e) => {
     e.stopPropagation();
     chrome.runtime.sendMessage({ target: "background", type: "stop" });
