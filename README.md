@@ -19,7 +19,7 @@ A Chrome extension that reads web articles aloud using text-to-speech. Supports 
 
 1. **Download or clone this repo:**
 
-    git clone https://github.com/henrino3/pagevoice.git
+    git clone https://github.com/h-mascot/pagevoice.git
 
    Or download the ZIP and extract it.
 
@@ -85,16 +85,18 @@ Uses your system's built-in voices. Options vary by operating system.
 
 ```
 pagevoice/
-├── manifest.json      # Extension configuration
-├── popup.html         # Extension popup UI
-├── popup.js           # Popup logic and TTS controls
-├── background.js      # Service worker for audio
-├── content.js         # Article extraction script
-├── styles.css         # Popup styling
-├── icon-16.png        # Toolbar icon (16x16)
-├── icon-48.png        # Extension management icon
-├── icon-128.png       # Chrome Web Store icon
-└── README.md          # This file
+├── manifest.json       # Extension configuration (MV3)
+├── popup.html/js/css   # Popup UI — player controls + settings
+├── background.js       # Service worker — message routing, offscreen lifecycle
+├── offscreen.html/js   # Persistent audio playback (survives popup close)
+├── content.js          # Article text extraction
+├── content-player.css  # Floating mini-player styles
+├── kokoro_server.py    # Optional self-hosted Kokoro TTS server (127.0.0.1:8881)
+├── icon-*.png          # Toolbar + store icons
+├── README.md           # This file
+├── PRIVACY.md          # Privacy policy (linked from store listing)
+├── LICENSE             # MIT
+└── docs/store-listing.md  # Chrome Web Store submission draft
 ```
 
 ## Troubleshooting
@@ -114,7 +116,12 @@ pagevoice/
 
 ## License
 
-MIT - Feel free to modify and distribute!
+MIT — see [LICENSE](LICENSE). Feel free to modify and distribute!
+
+## Privacy
+
+No accounts, no analytics, no telemetry. See [PRIVACY.md](PRIVACY.md) for
+exactly what data goes where.
 
 ---
 
