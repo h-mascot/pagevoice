@@ -5,6 +5,9 @@
   <title>PageVoice Offscreen</title>
 </head>
 <body>
+  <!-- pv-utils.js must load first: its top-level declarations are globals
+       used by offscreen.js (and unit-tested in Node via lib/pv-utils.test.js). -->
+  <script src="lib/pv-utils.js"></script>
   <script src="offscreen.js"></script>
 </body>
 </html>

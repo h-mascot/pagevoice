@@ -1,0 +1,12 @@
+{
+  "name": "pagevoice",
+  "version": "2.1.0",
+  "private": true,
+  "description": "PageVoice — read articles aloud (Chrome MV3 extension). Dev tooling only: the extension itself ships as-is with no build step; this file exists for the node --test runner.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

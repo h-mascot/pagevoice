@@ -101,7 +101,7 @@ function playAudioBlob(blob, playbackRate = 1.0) {
     if (isStopped) { resolve(); return; }
     const url      = URL.createObjectURL(blob);
     const audio    = new Audio(url);
-    const safeRate = Math.min(4.0, Math.max(0.25, playbackRate || 1.0));
+    const safeRate = clampAudioRate(playbackRate);
 
     audio.defaultPlaybackRate = safeRate;
     audio.playbackRate        = safeRate;
@@ -185,19 +185,11 @@ async function readResponseError(res) {
 const EDGE_TOKEN  = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const EDGE_WS_URL = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${EDGE_TOKEN}`;
 const STREAMELEMENTS_TTS_URL = "https://api.streamelements.com/kappa/v2/speech";
-const EDGE_STREAMELEMENTS_VOICE_MAP = {
-  "en-GB-SoniaNeural":   "Amy",
-  "en-GB-RyanNeural":    "Brian",
-  "en-US-JennyNeural":   "Joanna",
-  "en-US-GuyNeural":     "Matthew",
-  "en-AU-NatashaNeural": "Nicole",
-  "en-AU-WilliamNeural": "Russell",
-  "en-US-AriaNeural":    "Joanna",
-};
 
-function getStreamElementsVoice(voiceName) {
-  return EDGE_STREAMELEMENTS_VOICE_MAP[voiceName] || "Amy";
-}
+// Pure logic (StreamElements voice mapping, XML escaping, speed clamps,
+// prosody conversion, sentence splitting, text chunking) lives in
+// lib/pv-utils.js — loaded by offscreen.html BEFORE this file, so its
+// top-level declarations are globals here and unit-testable in Node.
 
 function mkConnectionId() {
   return "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".replace(/x/g, () =>
@@ -232,8 +224,7 @@ function edgeConfigMsg() {
 
 function edgeSsmlMsg(requestId, voiceName, text, speedRate) {
   // Convert numeric speed (1.0) to Edge TTS prosody rate (+0%, +50%, -25%, etc.)
-  const pct = Math.round((speedRate - 1) * 100);
-  const rateStr = (pct >= 0 ? "+" : "") + pct + "%";
+  const rateStr = speedToProsodyRate(speedRate);
   const ssml = [
     `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>`,
     `<voice name='${voiceName}'>`,
@@ -248,23 +239,6 @@ function edgeSsmlMsg(requestId, voiceName, text, speedRate) {
     `Path:ssml\r\n\r\n` +
     ssml
   );
-}
-
-function escapeXml(str) {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-function splitIntoSentences(text) {
-  const input = (text || "").trim();
-  if (!input) return [];
-  return (input.match(/[^.!?]+(?:[.!?]+|$)/g) || [input])
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
 }
 
 // Voice → Google Translate language code mapping
@@ -458,7 +432,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey) {
           model: "tts-1",
           input: chunks[i],
           voice: effectiveVoice,
-          speed: Math.min(4.0, Math.max(0.25, speed || 1.0)),
+          speed: clampAudioRate(speed),
         }),
       });
 
@@ -614,31 +588,6 @@ function speakWithLocalTTS(text, voiceName, speed) {
   speakNext();
 }
 
-// ─── Text Splitter ────────────────────────────────────────────────────────────
-
-function splitText(text, maxLen) {
-  const chunks    = [];
-  const sentences = splitIntoSentences(text);
-  let   chunk     = "";
-
-  for (const s of sentences) {
-    if (s.length > maxLen) {
-      // Very long sentence: split by commas or just cut hard
-      if (chunk) { chunks.push(chunk.trim()); chunk = ""; }
-      const parts = s.match(new RegExp(`.{1,${maxLen}}`, "g")) || [s];
-      parts.forEach((p) => chunks.push(p.trim()));
-    } else if ((chunk ? `${chunk} ${s}` : s).length > maxLen) {
-      if (chunk) chunks.push(chunk.trim());
-      chunk = s;
-    } else {
-      chunk = chunk ? `${chunk} ${s}` : s;
-    }
-  }
-
-  if (chunk.trim()) chunks.push(chunk.trim());
-  return chunks.filter(Boolean);
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
@@ -648,7 +597,7 @@ function sleep(ms) {
 async function speakWithKokoro(text, voice, speedRate) {
   const effectiveVoice = voice || "af_heart"; // default Kokoro voice
   const chunks = splitText(text, 2500); // 2500 chars per chunk is fine
-  const safeSpeed = Math.min(3.0, Math.max(0.5, speedRate || 1.0));
+  const safeSpeed = clampKokoroSpeed(speedRate);
 
   for (let i = 0; i < chunks.length; i++) {
     if (isStopped) return;
