@@ -34,6 +34,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "play": {
         isStopped = false;
         isPaused  = false;
+        resetHighlight(); // a fresh play re-emits highlight events from the top
         const { text, engine, voice, speed, apiKey } = message.payload;
         // Listening-queue resume: 0-based index of the first chunk to play.
         const startChunk = Number.isFinite(message.payload?.startChunk)
@@ -98,9 +99,67 @@ function reportState(state, statusText, extra = {}) {
   }).catch(() => {});
 }
 
+// ─── Highlight reporting (issue #4) ──────────────────────────────────────────
+//
+// Word/sentence highlight events are high-frequency and deliberately do NOT
+// flow through reportState (they would flood chrome.storage.session). They
+// go straight to background.js, which forwards them to the active tab's
+// content script. Payload: { engine, sentence, word } where `sentence` is
+// the 0-based GLOBAL sentence index (over the whole article, as segmented
+// by splitIntoSentences on the same text content.js extracted) and `word`
+// is the 0-based word index inside that sentence. Events are deduped by
+// (engine, sentence, word); the key resets on every new play message so a
+// replay re-emits from the top.
+
+let _lastHighlightKey = "";
+
+function resetHighlight() {
+  _lastHighlightKey = "";
+}
+
+function reportHighlight(engine, chunk, localSentence, word) {
+  const base = typeof chunk?.sentenceStart === "number" ? chunk.sentenceStart : null;
+  if (base === null) return;
+  const sentence = base + Math.max(0, Math.floor(localSentence || 0));
+  const key = `${engine}:${sentence}:${word}`;
+  if (key === _lastHighlightKey) return;
+  _lastHighlightKey = key;
+  chrome.runtime.sendMessage({
+    target: "background",
+    type:   "highlightUpdate",
+    payload: { engine, sentence, word },
+  }).catch(() => {});
+}
+
+// Build the onTime(mediaTimeSec, durationSec) callback for an audio chunk.
+// Word events (Edge TTS Bing path) give exact word timing; otherwise the
+// position is estimated proportionally from the audio element's media
+// position. Both are anchored to MEDIA time (currentTime), so highlighting
+// stays in sync at any playbackRate (0.5x–3x) — currentTime reaches a
+// word's media offset at the same media position regardless of rate.
+function makeHighlightTracker(engine, chunk, wordEvents) {
+  const sentences = splitIntoSentences(chunk.text);
+  return (mediaTimeSec, durationSec) => {
+    if (isStopped) return;
+    let ordinal;
+    if (Array.isArray(wordEvents) && wordEvents.length > 0) {
+      ordinal = wordOrdinalAtMediaTime(wordEvents, mediaTimeSec);
+    } else if (Number.isFinite(durationSec) && durationSec > 0) {
+      const fraction = Math.min(1, Math.max(0, mediaTimeSec / durationSec));
+      ordinal = wordOrdinalFromFraction(chunk.text, fraction);
+    } else {
+      return; // duration not known yet — wait for the next timeupdate
+    }
+    const sw = wordOrdinalToSentenceWord(sentences, ordinal);
+    if (sw) reportHighlight(engine, chunk, sw.sentence, sw.word);
+  };
+}
+
 // ─── Shared audio player ──────────────────────────────────────────────────────
 
-function playAudioBlob(blob, playbackRate = 1.0) {
+// onTime, when provided, receives (mediaTimeSec, durationSec) on every
+// audio timeupdate — used by the highlighting trackers (issue #4).
+function playAudioBlob(blob, playbackRate = 1.0, onTime = null) {
   return new Promise((resolve, reject) => {
     if (isStopped) { resolve(); return; }
     const url      = URL.createObjectURL(blob);
@@ -111,19 +170,30 @@ function playAudioBlob(blob, playbackRate = 1.0) {
     audio.playbackRate        = safeRate;
     currentAudio = audio;
 
-    audio.onended = () => {
+    const cleanup = () => {
+      audio.ontimeupdate = null;
       URL.revokeObjectURL(url);
       currentAudio = null;
+    };
+
+    if (onTime) {
+      audio.ontimeupdate = () => {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          try { onTime(audio.currentTime, audio.duration); } catch (_) {}
+        }
+      };
+    }
+
+    audio.onended = () => {
+      cleanup();
       resolve();
     };
     audio.onerror = () => {
-      URL.revokeObjectURL(url);
-      currentAudio = null;
+      cleanup();
       reject(new Error("Audio playback error"));
     };
     audio.play().catch((error) => {
-      URL.revokeObjectURL(url);
-      currentAudio = null;
+      cleanup();
       reject(error);
     });
   });
@@ -287,7 +357,11 @@ async function edgeTTSChunkViaGoogle(voiceName, text) {
   return new Blob(audioBlobs, { type: "audio/mpeg" });
 }
 
-// Synthesise a single chunk via Edge TTS WebSocket; resolves with MP3 Blob
+// Synthesise a single chunk via Edge TTS WebSocket; resolves with
+// { blob, wordEvents } where wordEvents are the WordBoundary metadata
+// events: [{ offset (100ns ticks from audio start), duration, text }],
+// used for exact word-level highlighting (issue #4). Engines without
+// metadata pass wordEvents: [] and fall back to proportional estimation.
 function edgeTTSChunkViaBing(voiceName, text, speedRate) {
   return new Promise((resolve, reject) => {
     const connectionId = mkConnectionId();
@@ -304,6 +378,7 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
     ws.binaryType = "arraybuffer";
 
     const audioChunks = [];
+    const wordEvents  = [];
     let   turnDone    = false;
     const timeout     = setTimeout(() => {
       ws.close();
@@ -317,10 +392,26 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
 
     ws.onmessage = (event) => {
       if (typeof event.data === "string") {
-        // Text frame — check for turn.end
+        // Text frame — turn.end closes the turn; audio.metadata carries
+        // word boundary timing (wordBoundaryEnabled: "true" above).
         if (event.data.includes("Path:turn.end")) {
           turnDone = true;
           ws.close();
+        } else if (event.data.includes("Path:audio.metadata")) {
+          try {
+            const headerEnd = event.data.indexOf("\r\n\r\n");
+            const body = headerEnd === -1 ? "" : event.data.slice(headerEnd + 4);
+            const meta = JSON.parse(body);
+            for (const m of meta?.Metadata || []) {
+              if (m?.Type === "WordBoundary" && Number.isFinite(m?.Data?.Offset)) {
+                wordEvents.push({
+                  offset:   m.Data.Offset,
+                  duration: m.Data.Duration || 0,
+                  text:     m.Data?.text?.Text || "",
+                });
+              }
+            }
+          } catch (_) { /* malformed metadata frame — ignore */ }
         }
       } else {
         // Binary frame — audio data
@@ -345,7 +436,7 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
       }
       // Merge ArrayBuffers into a single Blob
       const blob = new Blob(audioChunks, { type: "audio/mpeg" });
-      resolve(blob);
+      resolve({ blob, wordEvents });
     };
 
     ws.onerror = (err) => {
@@ -358,7 +449,7 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
 async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
   const voice  = voiceName || "en-GB-SoniaNeural";
   const spd    = speed || 1.0;
-  const chunks = splitText(text, 900); // Edge TTS works best with ~800-1000 char chunks
+  const chunks = buildTextChunks(text, 900); // Edge TTS works best with ~800-1000 char chunks
   const startAt = clampStartIndex(startChunk, chunks.length);
 
   for (let i = startAt; i < chunks.length; i++) {
@@ -369,22 +460,24 @@ async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
     reportState("playing", `Fetching audio… ${i + 1}/${chunks.length}`, {
       chunk: i + 1, totalChunks: chunks.length, engine: "edge",
     });
+    reportHighlight("edge", chunks[i], 0, 0);
 
     try {
-      // Try Bing WebSocket first (best quality)
-      const blob = await edgeTTSChunkViaBing(voice, chunks[i], spd);
+      // Try Bing WebSocket first (best quality, word-boundary metadata)
+      const { blob, wordEvents } = await edgeTTSChunkViaBing(voice, chunks[i].text, spd);
       if (isStopped) return;
       reportState("playing", `Playing… ${i + 1}/${chunks.length}`, {
         chunk: i + 1, totalChunks: chunks.length, engine: "edge",
       });
-      await playAudioBlob(blob);
+      await playAudioBlob(blob, 1.0, makeHighlightTracker("edge", chunks[i], wordEvents));
       while (isPaused && !isStopped) { await sleep(100); }
     } catch (bingErr) {
       try {
-        // Fallback: Google Translate TTS (free, no auth)
-        const blob = await edgeTTSChunkViaGoogle(voice, chunks[i]);
+        // Fallback: Google Translate TTS (free, no auth) — no word metadata,
+        // so highlighting falls back to proportional estimation.
+        const blob = await edgeTTSChunkViaGoogle(voice, chunks[i].text);
         if (isStopped) return;
-        await playAudioBlob(blob, spd);
+        await playAudioBlob(blob, spd, makeHighlightTracker("edge", chunks[i], null));
         while (isPaused && !isStopped) { await sleep(100); }
       } catch (googleErr) {
         // Last resort: Browser Local TTS
@@ -394,7 +487,10 @@ async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
             totalChunks: chunks.length,
             engine: "local",
           });
-          speakWithLocalTTS(chunks.slice(i).join(" "), null, spd);
+          speakWithLocalTTS(
+            chunks.slice(i).map((c) => c.text).join(" "),
+            null, spd, 0, chunks[i].sentenceStart
+          );
         }
         return;
       }
@@ -415,7 +511,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
   }
 
   const effectiveVoice = voice || "nova";
-  const chunks         = splitText(text, 4000);
+  const chunks         = buildTextChunks(text, 4000);
   const startAt        = clampStartIndex(startChunk, chunks.length);
 
   for (let i = startAt; i < chunks.length; i++) {
@@ -426,6 +522,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
     reportState("playing", `Fetching audio… ${i + 1}/${chunks.length}`, {
       chunk: i + 1, totalChunks: chunks.length, engine: "openai",
     });
+    reportHighlight("openai", chunks[i], 0, 0);
 
     try {
       const res = await fetch("https://api.openai.com/v1/audio/speech", {
@@ -436,7 +533,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
         },
         body: JSON.stringify({
           model: "tts-1",
-          input: chunks[i],
+          input: chunks[i].text,
           voice: effectiveVoice,
           speed: clampAudioRate(speed),
         }),
@@ -454,7 +551,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
         chunk: i + 1, totalChunks: chunks.length, engine: "openai",
       });
 
-      await playAudioBlob(blob);
+      await playAudioBlob(blob, 1.0, makeHighlightTracker("openai", chunks[i], null));
 
       while (isPaused && !isStopped) { await sleep(100); }
     } catch (err) {
@@ -475,7 +572,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
 async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
   const effectiveKey   = (apiKey && apiKey.trim()) || DEFAULT_ELEVENLABS_KEY;
   const effectiveVoice = voice || "21m00Tcm4TlvDq8ikWAM"; // Rachel
-  const chunks         = splitText(text, 2500);
+  const chunks         = buildTextChunks(text, 2500);
   const startAt        = clampStartIndex(startChunk, chunks.length);
 
   if (!effectiveKey) {
@@ -491,6 +588,7 @@ async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
     reportState("playing", `Fetching audio… ${i + 1}/${chunks.length}`, {
       chunk: i + 1, totalChunks: chunks.length, engine: "elevenlabs",
     });
+    reportHighlight("elevenlabs", chunks[i], 0, 0);
 
     try {
       const res = await fetch(
@@ -503,7 +601,7 @@ async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
             "xi-api-key":     effectiveKey,
           },
           body: JSON.stringify({
-            text:           chunks[i],
+            text:           chunks[i].text,
             model_id:       "eleven_monolingual_v1",
             voice_settings: { stability: 0.5, similarity_boost: 0.75 },
           }),
@@ -522,7 +620,7 @@ async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
         chunk: i + 1, totalChunks: chunks.length, engine: "elevenlabs",
       });
 
-      await playAudioBlob(blob, speed || 1.0);
+      await playAudioBlob(blob, speed || 1.0, makeHighlightTracker("elevenlabs", chunks[i], null));
 
       while (isPaused && !isStopped) { await sleep(100); }
     } catch (err) {
@@ -540,7 +638,12 @@ async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
 
 // ─── Browser Local TTS ────────────────────────────────────────────────────────
 
-function speakWithLocalTTS(text, voiceName, speed, startChunk = 0) {
+// sentenceBase: the GLOBAL sentence index of the first sentence in `text`
+// (non-zero only when this is the network-unavailable fallback inside
+// speakWithEdgeTTS, where playback resumes mid-article). Sentence-level
+// highlight is exact (one utterance = one sentence); word-level uses
+// utterance.onboundary where the platform fires it.
+function speakWithLocalTTS(text, voiceName, speed, startChunk = 0, sentenceBase = 0) {
   if (typeof speechSynthesis === "undefined") {
     reportState("stopped", "Speech synthesis unavailable");
     return;
@@ -572,6 +675,16 @@ function speakWithLocalTTS(text, voiceName, speed, startChunk = 0) {
       const match  = voices.find((v) => v.name === voiceName);
       if (match) utterance.voice = match;
     }
+
+    reportHighlight("local", { sentenceStart: sentenceBase }, index, 0);
+
+    utterance.onboundary = (e) => {
+      if (isStopped) return;
+      if (e.name && e.name !== "word") return;
+      if (typeof e.charIndex !== "number") return;
+      const ordinal = wordOrdinalAtChar(sentences[index], e.charIndex);
+      reportHighlight("local", { sentenceStart: sentenceBase }, index, ordinal);
+    };
 
     utterance.onend = () => {
       index++;
@@ -605,7 +718,7 @@ function sleep(ms) {
 
 async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
   const effectiveVoice = voice || "af_heart"; // default Kokoro voice
-  const chunks = splitText(text, 2500); // 2500 chars per chunk is fine
+  const chunks = buildTextChunks(text, 2500); // 2500 chars per chunk is fine
   const safeSpeed = clampKokoroSpeed(speedRate);
   const startAt = clampStartIndex(startChunk, chunks.length);
 
@@ -617,12 +730,13 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
     reportState("playing", `Fetching Kokoro audio… ${i + 1}/${chunks.length}`, {
       chunk: i + 1, totalChunks: chunks.length, engine: "kokoro",
     });
+    reportHighlight("kokoro", chunks[i], 0, 0);
 
     try {
       const res = await fetchWithTimeout(`${KOKORO_BASE_URL}/v1/text-to-speech/${effectiveVoice}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: chunks[i], speed: safeSpeed }),
+        body: JSON.stringify({ text: chunks[i].text, speed: safeSpeed }),
       }, KOKORO_REQUEST_TIMEOUT_MS);
 
       if (!res.ok) {
@@ -636,7 +750,7 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
         chunk: i + 1, totalChunks: chunks.length, engine: "kokoro",
       });
 
-      await playAudioBlob(blob, speedRate);
+      await playAudioBlob(blob, speedRate, makeHighlightTracker("kokoro", chunks[i], null));
       if (isStopped) return;
     } catch (err) {
       if (isStopped) return;

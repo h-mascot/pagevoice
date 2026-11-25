@@ -146,3 +146,26 @@
   border-color: rgba(40, 160, 90, 0.5);
   color: #7fd69a;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Word highlighting (issue #4)
+   Spans are injected at text-node granularity (never restructuring
+   elements), so these rules only tint backgrounds. !important guards
+   against host-page rules; the scroll-margin keeps scrollIntoView
+   clear of the floating mini-player.
+   ═══════════════════════════════════════════════════════════════ */
+
+.pv-s {
+  scroll-margin: 25vh 0 25vh 0;
+  border-radius: 2px;
+  transition: background-color 0.12s linear;
+}
+
+.pv-s.pv-active {
+  background-color: rgba(255, 213, 79, 0.30) !important;
+}
+
+.pv-w.pv-word-active {
+  background-color: rgba(255, 183, 77, 0.55) !important;
+  border-radius: 2px;
+}
