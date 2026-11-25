@@ -330,3 +330,144 @@ body {
 .saved-indicator.show {
   opacity: 1;
 }
+
+/* ─── Listening Queue (issue #3) ─────────────────────────────────── */
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#queueBtn {
+  position: relative;
+}
+
+.queue-count {
+  position: absolute;
+  top: -3px;
+  right: -6px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #0a6cff;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+
+.save-queue-btn {
+  width: 100%;
+  padding: 8px 10px;
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  color: #ccc;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.save-queue-btn:hover {
+  background: #242424;
+  border-color: #3a3a3a;
+}
+
+.save-queue-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.queue-item:hover {
+  background: #232323;
+  border-color: #333;
+}
+
+.queue-item.current {
+  border-color: #0a6cff;
+}
+
+.queue-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.queue-item-title {
+  font-size: 12px;
+  color: #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-meta {
+  font-size: 10px;
+  color: #666;
+}
+
+.queue-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.queue-btn {
+  background: #262626;
+  border: 1px solid #333;
+  color: #aaa;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.queue-btn:hover {
+  background: #333;
+  color: #fff;
+}
+
+.queue-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.queue-empty {
+  font-size: 12px;
+  color: #666;
+  text-align: center;
+  padding: 24px 10px;
+  line-height: 1.6;
+}

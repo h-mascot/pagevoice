@@ -8,6 +8,7 @@ node --check content.js
 node --check offscreen.js
 node --check popup.js
 node --check lib/pv-utils.js
+node --check lib/pv-queue.js
 
 if [ -f kokoro_server.py ]; then
   echo "[ctrl] Checking Python syntax"

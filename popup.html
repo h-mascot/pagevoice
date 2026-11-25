@@ -10,7 +10,10 @@
   <div id="player-view" class="view active">
     <div class="header">
       <span class="app-title">🔊 PageVoice</span>
-      <button id="settingsBtn" class="icon-btn" title="Settings">⚙️</button>
+      <div class="header-actions">
+        <button id="queueBtn" class="icon-btn" title="Listening queue">🎧<span id="queueCount" class="queue-count"></span></button>
+        <button id="settingsBtn" class="icon-btn" title="Settings">⚙️</button>
+      </div>
     </div>
 
     <div class="article-card">
@@ -27,7 +30,23 @@
       <button id="stopBtn" class="ctrl-btn stop-btn" title="Stop" disabled>⏹</button>
     </div>
 
+    <button id="saveQueueBtn" class="save-queue-btn" title="Save this page to your listening queue">＋ Save to queue</button>
+
     <div id="status" class="status-bar"></div>
+  </div>
+
+  <!-- ─── Queue View ────────────────────────────────────────────────────── -->
+  <div id="queue-view" class="view">
+    <div class="header">
+      <button id="queueBackBtn" class="icon-btn" title="Back">←</button>
+      <span class="app-title">🎧 Listening Queue</span>
+    </div>
+
+    <div id="queueList" class="queue-list"></div>
+    <div id="queueEmpty" class="queue-empty">
+      Queue is empty.<br>
+      Open an article and press “＋ Save to queue”.
+    </div>
   </div>
 
   <!-- ─── Settings View ─────────────────────────────────────────────────── -->
