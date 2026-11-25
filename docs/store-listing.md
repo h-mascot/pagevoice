@@ -1,7 +1,7 @@
 # Chrome Web Store Listing — Draft
 
 Everything needed for the first submission. Owner account actions marked
-**[human]**.
+**[human]**. Target version: **v2.2.0** (see CHANGELOG.md).
 
 ## Store account prerequisites **[human]**
 
@@ -14,7 +14,7 @@ Everything needed for the first submission. Owner account actions marked
 
 - **Name:** PageVoice — Read Articles Aloud
 - **Summary** (≤132 chars):
-  `Read any web article aloud. Free offline voices, Edge TTS, or premium AI voices from OpenAI and ElevenLabs. Bring your own key.`
+  `Read articles and PDFs aloud. Queue pages like a podcast, follow word-by-word. Free voices or premium — bring your own key.`
 - **Category:** Productivity → Accessibility
 - **Language:** English
 
@@ -29,6 +29,8 @@ CHOOSE YOUR VOICE
 • Edge TTS — natural neural voices, free, no account needed.
 • OpenAI TTS — premium voices with your own API key.
 • ElevenLabs — lifelike voices with your own API key.
+• Kokoro — self-hosted on your own machine; free, private, one-click setup
+  (optional; see the repo's kokoro-setup guide).
 
 WHY PEOPLE USE IT
 • Catch up on reading while commuting, cooking, or at the gym
@@ -38,6 +40,11 @@ WHY PEOPLE USE IT
 
 FEATURES
 • Smart article extraction — grabs the article, skips nav and clutter
+• Listening queue — save pages and play through like a podcast, with
+  auto-advance and per-item resume
+• Word highlighting (opt-in) — follow along karaoke-style, in sync across
+  engines and speeds
+• PDF import — read local PDFs aloud right in the queue (text-layer PDFs)
 • Playback that survives closing the popup (offscreen audio)
 • Keyboard shortcuts — play/pause, stop, and save-to-queue without opening
   the popup (defaults Alt+Shift+P / S / Q, rebindable at
@@ -60,9 +67,11 @@ See PRIVACY.md in the repository. No data collection, no tracking.
 ## Screenshots (1280x800 or 640x400) — to capture **[human or agent]**
 
 1. Popup open on a long article, engine selector visible
-2. Floating mini-player mid-article with play/pause controls
-3. Settings view with API key field + voice dropdown
-4. Optional: dark-mode variant
+2. Listening queue view with several saved items + the 📄 PDF import button
+3. Article mid-read with word highlighting on the active sentence
+4. Floating mini-player mid-article with play/pause controls
+5. Settings view with API key field + voice dropdown
+6. Optional: dark-mode variant
 
 ## Privacy tab answers (developer dashboard)
 
@@ -87,6 +96,8 @@ See PRIVACY.md in the repository. No data collection, no tracking.
 
 ## Post-submission checklist
 
+- [ ] Build the upload zip: `bash scripts/package-zip.sh` (run from a clean
+      checkout of the `v2.2.0` tag) → `dist/pagevoice-2.2.0.zip`
 - [ ] Verify listing renders correctly in incognito preview
 - [ ] Test the "installed from store" build end-to-end (not just unpacked)
 - [ ] Mirror listing to Edge Add-ons (same Chromium package)
