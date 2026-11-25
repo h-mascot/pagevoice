@@ -7,6 +7,10 @@
  *   - ElevenLabs  (API key, REST)
  *   - Browser Local TTS (SpeechSynthesis)
  *
+ * Also handles PDF text extraction (issue #5) with the vendored pdf.js
+ * (vendor/pdfjs, pinned 3.11.174), lazy-loaded here on first import so
+ * ordinary playback never pays the parse cost.
+ *
  * Lives as a persistent hidden HTML page so audio continues when popup closes.
  * Communicates exclusively with background.js via chrome.runtime.sendMessage.
  */
@@ -22,6 +26,70 @@ let isStopped       = false;
 let isPaused        = false;
 let currentState    = "stopped";
 let currentStatus   = "";
+
+// ─── PDF import — vendored pdf.js, lazy-loaded (issue #5) ────────────────────
+//
+// background sends { target: "offscreen", type: "pdf-extract", payload:
+// { buffer } }; extraction logic itself is lib/pv-pdf.js (unit-tested in
+// Node against the same vendored files). Load order matters: the worker
+// script must define globalThis.pdfjsWorker BEFORE pdf.min.js evaluates —
+// pdf.js then runs its worker on the main thread of this document, so no
+// `new Worker` and no workerSrc fetch ever happen (MV3-safe; see
+// vendor/pdfjs/VENDOR.md). ~1.5 MB of parse only happens on first import.
+
+let _pdfJsLoad = null;
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = chrome.runtime.getURL(src);
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error("Failed to load " + src));
+    document.head.appendChild(el);
+  });
+}
+
+function ensurePdfJs() {
+  if (window.pdfjsLib && window.pdfjsWorker) return Promise.resolve(window.pdfjsLib);
+  if (!_pdfJsLoad) {
+    _pdfJsLoad = (async () => {
+      try {
+        await loadScriptOnce("vendor/pdfjs/legacy/build/pdf.worker.min.js");
+        await loadScriptOnce("vendor/pdfjs/legacy/build/pdf.min.js");
+        if (!window.pdfjsLib || !window.pdfjsWorker) {
+          throw new Error("pdf.js globals missing after script load");
+        }
+        return window.pdfjsLib;
+      } catch (err) {
+        _pdfJsLoad = null; // allow a retry on the next import (script load
+                           // failure included — a cached rejected promise
+                           // would brick every later import until reload)
+        throw err;
+      }
+    })();
+  }
+  return _pdfJsLoad;
+}
+
+async function extractPdfOffscreen(buffer) {
+  let lib;
+  try {
+    lib = await ensurePdfJs();
+  } catch (_) {
+    return { ok: false, code: "load-failed", error: PDF_ERRORS["load-failed"] };
+  }
+  return extractPdfText(lib, buffer, {
+    onProgress: (page, total) => {
+      // Best-effort progress for the popup (it may already be closed —
+      // background completes the import either way).
+      chrome.runtime.sendMessage({
+        target:  "popup",
+        type:    "pdfImportProgress",
+        payload: { page, total },
+      }).catch(() => {});
+    },
+  });
+}
 
 // ─── Message Router ───────────────────────────────────────────────────────────
 
@@ -76,6 +144,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (currentAudio) { currentAudio.pause(); currentAudio = null; }
         if (typeof speechSynthesis !== "undefined") { speechSynthesis.cancel(); }
         sendResponse({ ok: true });
+        break;
+      }
+
+      // ── PDF text extraction (issue #5) ─────────────────────────────────
+      // Synchronous-response contract: background awaits the final result
+      // here (the channel stays open — `return true` below); per-page
+      // progress is pushed separately as pdfImportProgress → popup.
+      case "pdf-extract": {
+        const buffer = message.payload?.buffer;
+        if (!(buffer instanceof ArrayBuffer)) {
+          sendResponse({ ok: false, code: "invalid", error: "No PDF data received." });
+          break;
+        }
+        sendResponse(await extractPdfOffscreen(buffer));
         break;
       }
 
