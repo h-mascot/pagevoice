@@ -135,3 +135,14 @@
   background: rgba(255, 255, 255, 0.08);
   color: #ccc;
 }
+
+/* Save-to-queue button (listening queue, issue #3) */
+#__pagevoice_player__ .pv-queue {
+  font-size: 15px;
+}
+
+#__pagevoice_player__ .pv-queue:hover {
+  background: rgba(40, 160, 90, 0.3);
+  border-color: rgba(40, 160, 90, 0.5);
+  color: #7fd69a;
+}

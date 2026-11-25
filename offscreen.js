@@ -35,14 +35,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         isStopped = false;
         isPaused  = false;
         const { text, engine, voice, speed, apiKey } = message.payload;
+        // Listening-queue resume: 0-based index of the first chunk to play.
+        const startChunk = Number.isFinite(message.payload?.startChunk)
+          ? message.payload.startChunk
+          : 0;
 
         // Fire-and-forget — state updates are pushed to background
         switch (engine) {
-          case "edge":       speakWithEdgeTTS(text, voice, speed);       break;
-          case "openai":     speakWithOpenAI(text, voice, speed, apiKey); break;
-          case "elevenlabs": speakWithElevenLabs(text, voice, speed, apiKey); break;
-          case "kokoro":     speakWithKokoro(text, voice, speed);        break;
-          default:           speakWithLocalTTS(text, voice, speed);       break;
+          case "edge":       speakWithEdgeTTS(text, voice, speed, startChunk);       break;
+          case "openai":     speakWithOpenAI(text, voice, speed, apiKey, startChunk); break;
+          case "elevenlabs": speakWithElevenLabs(text, voice, speed, apiKey, startChunk); break;
+          case "kokoro":     speakWithKokoro(text, voice, speed, startChunk);        break;
+          default:           speakWithLocalTTS(text, voice, speed, startChunk);      break;
         }
         sendResponse({ ok: true });
         break;
@@ -351,12 +355,13 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
   });
 }
 
-async function speakWithEdgeTTS(text, voiceName, speed) {
+async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
   const voice  = voiceName || "en-GB-SoniaNeural";
   const spd    = speed || 1.0;
   const chunks = splitText(text, 900); // Edge TTS works best with ~800-1000 char chunks
+  const startAt = clampStartIndex(startChunk, chunks.length);
 
-  for (let i = 0; i < chunks.length; i++) {
+  for (let i = startAt; i < chunks.length; i++) {
     if (isStopped) return;
     while (isPaused && !isStopped) { await sleep(100); }
     if (isStopped) return;
@@ -403,7 +408,7 @@ async function speakWithEdgeTTS(text, voiceName, speed) {
 
 // ─── OpenAI TTS ───────────────────────────────────────────────────────────────
 
-async function speakWithOpenAI(text, voice, speed, apiKey) {
+async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
   if (!apiKey || !apiKey.trim()) {
     reportState("stopped", "OpenAI API key required — add it in Settings");
     return;
@@ -411,8 +416,9 @@ async function speakWithOpenAI(text, voice, speed, apiKey) {
 
   const effectiveVoice = voice || "nova";
   const chunks         = splitText(text, 4000);
+  const startAt        = clampStartIndex(startChunk, chunks.length);
 
-  for (let i = 0; i < chunks.length; i++) {
+  for (let i = startAt; i < chunks.length; i++) {
     if (isStopped) return;
     while (isPaused && !isStopped) { await sleep(100); }
     if (isStopped) return;
@@ -466,17 +472,18 @@ async function speakWithOpenAI(text, voice, speed, apiKey) {
 
 // ─── ElevenLabs TTS ───────────────────────────────────────────────────────────
 
-async function speakWithElevenLabs(text, voice, speed, apiKey) {
+async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
   const effectiveKey   = (apiKey && apiKey.trim()) || DEFAULT_ELEVENLABS_KEY;
   const effectiveVoice = voice || "21m00Tcm4TlvDq8ikWAM"; // Rachel
   const chunks         = splitText(text, 2500);
+  const startAt        = clampStartIndex(startChunk, chunks.length);
 
   if (!effectiveKey) {
     reportState("stopped", "ElevenLabs API key required — add it in Settings");
     return;
   }
 
-  for (let i = 0; i < chunks.length; i++) {
+  for (let i = startAt; i < chunks.length; i++) {
     if (isStopped) return;
     while (isPaused && !isStopped) { await sleep(100); }
     if (isStopped) return;
@@ -533,7 +540,7 @@ async function speakWithElevenLabs(text, voice, speed, apiKey) {
 
 // ─── Browser Local TTS ────────────────────────────────────────────────────────
 
-function speakWithLocalTTS(text, voiceName, speed) {
+function speakWithLocalTTS(text, voiceName, speed, startChunk = 0) {
   if (typeof speechSynthesis === "undefined") {
     reportState("stopped", "Speech synthesis unavailable");
     return;
@@ -542,10 +549,12 @@ function speakWithLocalTTS(text, voiceName, speed) {
   speechSynthesis.cancel();
 
   const sentences = splitIntoSentences(text);
-  let   index     = 0;
+  const startAt   = clampStartIndex(startChunk, sentences.length);
+  let   index     = startAt;
 
   reportState("playing", "Reading…", {
-    chunk: 1, totalChunks: sentences.length, engine: "local",
+    chunk: Math.min(startAt + 1, Math.max(1, sentences.length)),
+    totalChunks: sentences.length, engine: "local",
   });
 
   function speakNext() {
@@ -594,12 +603,13 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function speakWithKokoro(text, voice, speedRate) {
+async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
   const effectiveVoice = voice || "af_heart"; // default Kokoro voice
   const chunks = splitText(text, 2500); // 2500 chars per chunk is fine
   const safeSpeed = clampKokoroSpeed(speedRate);
+  const startAt = clampStartIndex(startChunk, chunks.length);
 
-  for (let i = 0; i < chunks.length; i++) {
+  for (let i = startAt; i < chunks.length; i++) {
     if (isStopped) return;
     while (isPaused && !isStopped) { await sleep(100); }
     if (isStopped) return;

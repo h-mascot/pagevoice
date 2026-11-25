@@ -6,6 +6,7 @@
  *
  * Views:
  *   #player-view  — default, shows transport controls + article info
+ *   #queue-view   — listening queue (issue #3): reorder, remove, play
  *   #settings-view — gear icon opens this; back arrow returns to player
  */
 
@@ -137,8 +138,15 @@ function getCuratedLocalVoices(voices) {
 
 const playerView    = document.getElementById("player-view");
 const settingsView  = document.getElementById("settings-view");
+const queueView     = document.getElementById("queue-view");
 const settingsBtn   = document.getElementById("settingsBtn");
 const backBtn       = document.getElementById("backBtn");
+const queueBtn      = document.getElementById("queueBtn");
+const queueBackBtn  = document.getElementById("queueBackBtn");
+const queueList     = document.getElementById("queueList");
+const queueEmpty    = document.getElementById("queueEmpty");
+const queueCount    = document.getElementById("queueCount");
+const saveQueueBtn  = document.getElementById("saveQueueBtn");
 
 const playBtn       = document.getElementById("playBtn");
 const pauseBtn      = document.getElementById("pauseBtn");
@@ -197,15 +205,30 @@ chrome.runtime.sendMessage({ target: "background", type: "getState" }, (res) => 
 
 // ─── View Switching ───────────────────────────────────────────────────────────
 
+const VIEWS = [playerView, settingsView, queueView];
+
+function showView(view) {
+  VIEWS.forEach((v) => v.classList.remove("active"));
+  view.classList.add("active");
+}
+
 settingsBtn.addEventListener("click", () => {
-  playerView.classList.remove("active");
-  settingsView.classList.add("active");
+  showView(settingsView);
 });
 
 backBtn.addEventListener("click", () => {
-  settingsView.classList.remove("active");
-  playerView.classList.add("active");
+  showView(playerView);
   // Always refresh engine label when returning to player view
+  engineLabel.textContent = engineDisplayName(currentEngine);
+});
+
+queueBtn.addEventListener("click", () => {
+  showView(queueView);
+  renderQueue();
+});
+
+queueBackBtn.addEventListener("click", () => {
+  showView(playerView);
   engineLabel.textContent = engineDisplayName(currentEngine);
 });
 
@@ -411,12 +434,157 @@ stopBtn.addEventListener("click", () => {
   progressInfo.textContent = "";
 });
 
+// ─── Listening Queue (issue #3) ───────────────────────────────────────────────
+
+let queueData = null; // { queue, currentId } — kept for the badge + re-render
+
+function fetchQueue() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ target: "background", type: "queueGet" }, (res) => {
+      if (chrome.runtime.lastError || !res?.ok) return resolve(null);
+      resolve(res.payload);
+    });
+  });
+}
+
+function updateQueueBadge() {
+  const count = queueData?.queue?.items?.length || 0;
+  queueCount.textContent = count > 0 ? String(count) : "";
+  queueBtn.title = count > 0 ? `Listening queue (${count} item${count === 1 ? "" : "s"})` : "Listening queue";
+}
+
+async function renderQueue() {
+  queueData = await fetchQueue();
+  updateQueueBadge();
+  queueList.innerHTML = "";
+
+  if (!queueData) {
+    queueEmpty.textContent = "Queue unavailable — reopen the popup to retry.";
+    queueEmpty.style.display = "block";
+    return;
+  }
+
+  const { queue, currentId } = queueData;
+  queueEmpty.style.display = queue.items.length === 0 ? "block" : "none";
+  queueEmpty.innerHTML = "Queue is empty.<br>Open an article and press “＋ Save to queue”.";
+
+  queue.items.forEach((entry, index) => {
+    const row = document.createElement("div");
+    row.className = "queue-item" + (entry.id === currentId ? " current" : "");
+    row.dataset.id = entry.id;
+    row.title = "Play this item";
+
+    const info = document.createElement("div");
+    info.className = "queue-item-info";
+
+    const title = document.createElement("div");
+    title.className = "queue-item-title";
+    title.textContent = entry.title || "Untitled";
+    info.appendChild(title);
+
+    if (entry.position > 0) {
+      const meta = document.createElement("div");
+      meta.className = "queue-item-meta";
+      meta.textContent = `resumes at part ${entry.position + 1}`;
+      info.appendChild(meta);
+    }
+    if (entry.id === currentId) {
+      const now = document.createElement("div");
+      now.className = "queue-item-meta";
+      now.textContent = "▶ now playing";
+      info.appendChild(now);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "queue-item-actions";
+    actions.appendChild(queueActionBtn("▲", "Move up",   index === 0, () => sendQueueAction("queueMove", { id: entry.id, dir: -1 })));
+    actions.appendChild(queueActionBtn("▼", "Move down", index === queue.items.length - 1, () => sendQueueAction("queueMove", { id: entry.id, dir: 1 })));
+    actions.appendChild(queueActionBtn("✕", "Remove",    false, () => sendQueueAction("queueRemove", { id: entry.id })));
+
+    row.appendChild(info);
+    row.appendChild(actions);
+
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".queue-item-actions")) return;
+      playQueueItem(entry.id);
+    });
+
+    queueList.appendChild(row);
+  });
+}
+
+function queueActionBtn(label, title, disabled, onClick) {
+  const btn = document.createElement("button");
+  btn.className = "queue-btn";
+  btn.textContent = label;
+  btn.title = title;
+  btn.disabled = disabled;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  return btn;
+}
+
+function sendQueueAction(type, payload) {
+  chrome.runtime.sendMessage({ target: "background", type, payload });
+}
+
+function playQueueItem(id) {
+  chrome.runtime.sendMessage(
+    { target: "background", type: "queuePlay", payload: { id } },
+    (res) => {
+      if (chrome.runtime.lastError) return;
+      if (res?.ok) {
+        showView(playerView);
+        setUIState("playing");
+        setStatus("Starting queue playback…");
+      } else {
+        setStatus(res?.error || "Could not play this item.", true);
+      }
+    }
+  );
+}
+
+saveQueueBtn.addEventListener("click", () => {
+  saveQueueBtn.disabled = true;
+  (async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const payload = tab ? { tabId: tab.id } : {};
+      chrome.runtime.sendMessage(
+        { target: "background", type: "queueAddCurrent", payload },
+        (res) => {
+          saveQueueBtn.disabled = false;
+          if (chrome.runtime.lastError) { setStatus("Could not save — try again.", true); return; }
+          if (res?.ok) setStatus("Saved to queue ✓");
+          else setStatus(res?.error || "Could not extract text on this page.", true);
+        }
+      );
+    } catch (err) {
+      saveQueueBtn.disabled = false;
+      setStatus("Error: " + err.message, true);
+    }
+  })();
+});
+
+// Badge count on open
+fetchQueue().then((data) => {
+  queueData = data;
+  updateQueueBadge();
+});
+
 // ─── State Updates from Background ───────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.target !== "popup") return;
   if (message.type === "stateUpdate" && message.payload) {
     applyState(message.payload);
+  }
+  if (message.type === "queueUpdate" && message.payload) {
+    queueData = message.payload;
+    updateQueueBadge();
+    if (queueView.classList.contains("active")) renderQueue();
   }
 });
 

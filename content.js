@@ -119,6 +119,7 @@ function injectPlayer() {
       <div class="pv-controls">
         <button class="pv-btn pv-play" title="Play/Pause">▶</button>
         <button class="pv-btn pv-stop" title="Stop">⏹</button>
+        <button class="pv-btn pv-queue" title="Save to queue">＋</button>
         <button class="pv-btn pv-close" title="Close">✕</button>
       </div>
     </div>
@@ -131,6 +132,23 @@ function injectPlayer() {
     e.stopPropagation();
     chrome.runtime.sendMessage({ target: "background", type: "stop" });
     removePlayer();
+  });
+
+  playerEl.querySelector(".pv-queue").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const btn = playerEl.querySelector(".pv-queue");
+    btn.textContent = "…";
+    chrome.runtime.sendMessage({ target: "background", type: "queueAddCurrent" }, (res) => {
+      if (chrome.runtime.lastError) { resetQueueBtn(btn); return; }
+      if (res?.ok) {
+        btn.textContent = "✓";
+        btn.title = "Saved to queue";
+      } else {
+        btn.textContent = "✕";
+        btn.title = res?.error || "Could not save";
+      }
+      setTimeout(() => resetQueueBtn(btn), 2000);
+    });
   });
 
   playerEl.querySelector(".pv-close").addEventListener("click", (e) => {
@@ -184,6 +202,12 @@ function removePlayer() {
     playerEl      = null;
     playerVisible = false;
   }
+}
+
+function resetQueueBtn(btn) {
+  if (!btn) return;
+  btn.textContent = "＋";
+  btn.title = "Save to queue";
 }
 
 // ─── Drag Logic ───────────────────────────────────────────────────────────────
