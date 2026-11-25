@@ -9,9 +9,11 @@
  * Message protocol (all messages carry `target`):
  *   popup     → background: getState | play | pause | resume | stop
  *   offscreen → background: stateUpdate { state, statusText, chunk, totalChunks, engine }
+ *   offscreen → background: highlightUpdate { engine, sentence, word } (issue #4)
  *   background → offscreen: play | pause | resume | stop
  *   background → popup:     stateUpdate | queueUpdate
  *   background → content:   playerUpdate { state, chunk, totalChunks }
+ *                           highlightUpdate { engine, sentence, word }
  *
  * Listening queue (issue #3): the queue lives in chrome.storage.local
  * (key QUEUE_STORAGE_KEY, schema-versioned by lib/pv-queue.js). Queue logic
@@ -217,7 +219,7 @@ async function advanceQueueAfterFinish() {
 
 // ─── Content Script Notifications ─────────────────────────────────────────────
 
-async function notifyContentScript(tabId, payload) {
+async function notifyContentScript(tabId, payload, type = "playerUpdate") {
   let targetTabId = tabId;
 
   if (typeof targetTabId !== "number") {
@@ -228,7 +230,7 @@ async function notifyContentScript(tabId, payload) {
   if (typeof targetTabId !== "number") return;
 
   _activeTabId = targetTabId;
-  chrome.tabs.sendMessage(targetTabId, { target: "content", type: "playerUpdate", payload }).catch(() => {});
+  chrome.tabs.sendMessage(targetTabId, { target: "content", type, payload }).catch(() => {});
 }
 
 // ─── Message Router ────────────────────────────────────────────────────────────
@@ -349,6 +351,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           totalChunks: finalState.totalChunks || 0,
         });
 
+        sendResponse({ ok: true });
+        break;
+      }
+
+      // ── Word/sentence highlight cursor (issue #4) ────────────────────────
+      // High-frequency progress from offscreen: forwarded to the active
+      // tab's content script ONLY — never persisted into playback state.
+      // Queue playback has no active tab, so it is simply not forwarded.
+      case "highlightUpdate": {
+        let tabId = _activeTabId;
+        if (typeof tabId !== "number") {
+          const stored = await chrome.storage.session.get("activeTabId").catch(() => ({}));
+          if (typeof stored.activeTabId === "number") {
+            tabId = stored.activeTabId;
+            _activeTabId = tabId;
+          }
+        }
+        if (typeof tabId === "number") {
+          chrome.tabs.sendMessage(tabId, {
+            target: "content",
+            type:   "highlightUpdate",
+            payload: message.payload,
+          }).catch(() => {});
+        }
         sendResponse({ ok: true });
         break;
       }

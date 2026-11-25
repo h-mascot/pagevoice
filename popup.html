@@ -97,6 +97,15 @@
         <input type="range" id="speedInput" min="0.5" max="3" step="0.1" value="1" class="speed-slider">
       </div>
 
+      <!-- Highlight while reading (issue #4) -->
+      <div class="setting-group">
+        <label class="setting-toggle">
+          <input type="checkbox" id="highlightToggle">
+          <span class="setting-toggle-label">Highlight text while reading</span>
+        </label>
+        <div class="setting-hint">Follows along in the page — sentence by sentence, word by word. Off by default.</div>
+      </div>
+
       <!-- OpenAI API Key -->
       <div id="openaiKeyGroup" class="setting-group api-key-group">
         <div class="setting-label">OpenAI API Key</div>

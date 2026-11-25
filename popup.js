@@ -160,6 +160,7 @@ const engineRadios  = document.querySelectorAll('input[name="engine"]');
 const voiceSelect   = document.getElementById("voiceSelect");
 const speedInput    = document.getElementById("speedInput");
 const speedValue    = document.getElementById("speedValue");
+const highlightToggle = document.getElementById("highlightToggle");
 
 const openaiKeyGroup = document.getElementById("openaiKeyGroup");
 const elevenKeyGroup = document.getElementById("elevenKeyGroup");
@@ -177,7 +178,7 @@ let activeTabId   = null;
 // ─── Initialise ───────────────────────────────────────────────────────────────
 
 chrome.storage.sync.get(
-  ["engine", "voice", "speed", "openaiKey", "elevenLabsKey"],
+  ["engine", "voice", "speed", "openaiKey", "elevenLabsKey", "highlightEnabled"],
   (data) => {
     currentEngine = data.engine || "edge";
     setEngineRadio(currentEngine);
@@ -185,6 +186,9 @@ chrome.storage.sync.get(
 
     speedInput.value = data.speed || 1.0;
     speedValue.textContent = (data.speed || 1.0) + "x";
+
+    // Word highlighting (issue #4): opt-in, off by default on first upgrade.
+    highlightToggle.checked = !!data.highlightEnabled;
 
     if (data.openaiKey)     openaiKeyInput.value = data.openaiKey;
     if (data.elevenLabsKey) elevenKeyInput.value  = data.elevenLabsKey;
@@ -340,6 +344,14 @@ voiceSelect.addEventListener("change", () => {
 speedInput.addEventListener("input", () => {
   speedValue.textContent = parseFloat(speedInput.value).toFixed(1) + "x";
   chrome.storage.sync.set({ speed: parseFloat(speedInput.value) });
+});
+
+// ─── Word Highlighting toggle (issue #4) ──────────────────────────────────────
+
+highlightToggle.addEventListener("change", () => {
+  // Opt-in setting. Content scripts listen for storage.onChanged and clear
+  // an active highlight immediately when this is switched off.
+  chrome.storage.sync.set({ highlightEnabled: highlightToggle.checked });
 });
 
 // ─── API Keys ─────────────────────────────────────────────────────────────────

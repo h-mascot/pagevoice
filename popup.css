@@ -471,3 +471,34 @@ body {
   padding: 24px 10px;
   line-height: 1.6;
 }
+
+/* ─── Highlight toggle (issue #4) ─────────────────────────────────── */
+
+.setting-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.setting-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #4a9eff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.setting-toggle-label {
+  font-size: 13px;
+  color: #e0e0e0;
+  line-height: 1.3;
+}
+
+.setting-hint {
+  font-size: 11px;
+  color: #777;
+  margin-top: 5px;
+  line-height: 1.4;
+}
