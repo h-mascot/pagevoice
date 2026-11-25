@@ -15,6 +15,13 @@
  *   background → content:   playerUpdate { state, chunk, totalChunks }
  *                           highlightUpdate { engine, sentence, word }
  *
+ * Keyboard shortcuts + read-from-here (issue #6): chrome.commands
+ * (play-pause, stop, save-to-queue) and the "Read from here" context menu
+ * drive the same playback functions as the popup's messages, so hotkeys
+ * work with the popup closed. background → content: getReadFromHere →
+ * { ok, text, title, startChunk } (startChunk is computed against the
+ * ACTIVE engine's chunking — see lib/pv-shortcuts.js).
+ *
  * Listening queue (issue #3): the queue lives in chrome.storage.local
  * (key QUEUE_STORAGE_KEY, schema-versioned by lib/pv-queue.js). Queue logic
  * is pure and unit-tested in lib/pv-queue.test.js; this file only wires it
@@ -217,6 +224,57 @@ async function advanceQueueAfterFinish() {
   return playQueueItem(next.id);
 }
 
+// ─── Playback control (issue #6: shared by popup, commands, context menu) ────
+
+// The popup's play/pause/resume/stop messages, the chrome.commands hotkeys,
+// and the "Read from here" context menu all funnel through these four
+// functions so every entry point behaves identically (queue-cursor drop,
+// offscreen lifecycle, mini-player notification included).
+
+async function startPlayback(payload) {
+  // Plain page playback is not queue playback — drop the queue cursor
+  // so a natural finish does not auto-advance into the queue.
+  if (!payload?.queueItemId) {
+    await setQueueCurrent(null);
+  }
+  if (typeof payload?.tabId === "number") {
+    await saveActiveTabId(payload.tabId);
+  }
+  await saveState({ state: "playing", statusText: "Starting…", engine: payload?.engine || "edge" });
+  await ensureOffscreenDocument();
+  chrome.runtime.sendMessage({
+    target: "offscreen",
+    type:   "play",
+    payload,
+  }).catch(() => {});
+  // Notify content script to show mini-player
+  await notifyContentScript(_activeTabId, { state: "playing", chunk: 0, totalChunks: 0 });
+}
+
+async function pausePlayback() {
+  await saveState({ state: "paused", statusText: "Paused" });
+  chrome.runtime.sendMessage({ target: "offscreen", type: "pause" }).catch(() => {});
+  await notifyContentScript(_activeTabId, { state: "paused", chunk: _state.chunk, totalChunks: _state.totalChunks });
+}
+
+async function resumePlayback() {
+  await saveState({ state: "playing", statusText: _state.statusText });
+  chrome.runtime.sendMessage({ target: "offscreen", type: "resume" }).catch(() => {});
+  await notifyContentScript(_activeTabId, { state: "playing", chunk: _state.chunk, totalChunks: _state.totalChunks });
+}
+
+async function stopPlayback() {
+  // Save the queue resume position before tearing playback down.
+  if (_queueCurrentId) {
+    await persistQueuePosition(_queueCurrentId, resumeIndexFromReportedChunk(_state.chunk));
+  }
+  await saveState({ state: "stopped", statusText: "", chunk: 0, totalChunks: 0 });
+  chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }).catch(() => {});
+  await notifyContentScript(_activeTabId, { state: "stopped" });
+  await sleep(250);
+  await closeOffscreenDocument();
+}
+
 // ─── Content Script Notifications ─────────────────────────────────────────────
 
 async function notifyContentScript(tabId, payload, type = "playerUpdate") {
@@ -252,61 +310,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
 
-      // ── Start playback ───────────────────────────────────────────────────
-      case "play": {
-        // Plain page playback is not queue playback — drop the queue cursor
-        // so a natural finish does not auto-advance into the queue.
-        if (!message.payload?.queueItemId) {
-          await setQueueCurrent(null);
-        }
-        if (typeof message.payload?.tabId === "number") {
-          await saveActiveTabId(message.payload.tabId);
-        }
-        await saveState({ state: "playing", statusText: "Starting…", engine: message.payload?.engine || "edge" });
-        await ensureOffscreenDocument();
-        chrome.runtime.sendMessage({
-          target: "offscreen",
-          type: "play",
-          payload: message.payload,
-        }).catch(() => {});
-        // Notify content script to show mini-player
-        await notifyContentScript(_activeTabId, { state: "playing", chunk: 0, totalChunks: 0 });
-        sendResponse({ ok: true });
-        break;
-      }
-
-      // ── Pause ────────────────────────────────────────────────────────────
-      case "pause": {
-        await saveState({ state: "paused", statusText: "Paused" });
-        chrome.runtime.sendMessage({ target: "offscreen", type: "pause" }).catch(() => {});
-        await notifyContentScript(_activeTabId, { state: "paused", chunk: _state.chunk, totalChunks: _state.totalChunks });
-        sendResponse({ ok: true });
-        break;
-      }
-
-      // ── Resume ───────────────────────────────────────────────────────────
-      case "resume": {
-        await saveState({ state: "playing", statusText: _state.statusText });
-        chrome.runtime.sendMessage({ target: "offscreen", type: "resume" }).catch(() => {});
-        await notifyContentScript(_activeTabId, { state: "playing", chunk: _state.chunk, totalChunks: _state.totalChunks });
-        sendResponse({ ok: true });
-        break;
-      }
-
-      // ── Stop ─────────────────────────────────────────────────────────────
-      case "stop": {
-        // Save the queue resume position before tearing playback down.
-        if (_queueCurrentId) {
-          await persistQueuePosition(_queueCurrentId, resumeIndexFromReportedChunk(_state.chunk));
-        }
-        await saveState({ state: "stopped", statusText: "", chunk: 0, totalChunks: 0 });
-        chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }).catch(() => {});
-        await notifyContentScript(_activeTabId, { state: "stopped" });
-        await sleep(250);
-        await closeOffscreenDocument();
-        sendResponse({ ok: true });
-        break;
-      }
+      // ── Playback control (shared with commands + context menu, issue #6) ─
+      case "play":   { await startPlayback(message.payload); sendResponse({ ok: true }); break; }
+      case "pause":  { await pausePlayback();                sendResponse({ ok: true }); break; }
+      case "resume": { await resumePlayback();               sendResponse({ ok: true }); break; }
+      case "stop":   { await stopPlayback();                 sendResponse({ ok: true }); break; }
 
       // ── State update from offscreen ──────────────────────────────────────
       case "stateUpdate": {
@@ -435,6 +443,122 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return true; // keep channel open for async sendResponse
 });
+
+// ─── Keyboard shortcuts + read-from-here (issue #6) ───────────────────────────
+//
+// chrome.commands (manifest "commands") and the context menu drive the SAME
+// playback functions as the popup's messages, so hotkeys work with the
+// popup closed. "Read from here" asks the tab's content script where the
+// anchor (the user's selection, or the paragraph they right-clicked) sits
+// in the article, then starts playback from the chunk covering that
+// sentence — computed against the active engine's chunking by the content
+// script (lib/pv-shortcuts.js), threaded through offscreen's startChunk.
+
+async function activeTab() {
+  const [tab] = await chrome.tabs
+    .query({ active: true, lastFocusedWindow: true })
+    .catch(() => []);
+  return typeof tab?.id === "number" ? tab : null;
+}
+
+// Build a page-playback payload from the user's saved settings. Playback
+// started outside the popup (command / context menu) has no popup to build
+// it, exactly like queue playback — background assembles it itself.
+async function pagePlayPayload(tab, data, startChunk) {
+  const settings = await chrome.storage.sync
+    .get(["engine", "voice", "speed", "openaiKey", "elevenLabsKey"])
+    .catch(() => ({}));
+  const engine = settings.engine || "edge";
+  return {
+    text:        data.text,
+    engine,
+    voice:       settings.voice || "",
+    speed:       parseFloat(settings.speed) || 1.0,
+    apiKey:      engine === "elevenlabs" ? (settings.elevenLabsKey || "") : (settings.openaiKey || ""),
+    tabId:       tab.id,
+    startChunk:  typeof startChunk === "number" ? startChunk : 0,
+  };
+}
+
+// play-pause hotkey: toggle playback; from a stopped state, start reading
+// the current page's article (from the top, or the given chunk).
+async function handlePlayPauseCommand() {
+  const st = await loadState();
+  // If state says active but no offscreen exists, it's stale → stopped.
+  if (st.state !== "stopped" && !(await hasOffscreenDocument())) {
+    await saveState({ state: "stopped", statusText: "", chunk: 0, totalChunks: 0 });
+    st.state = "stopped";
+  }
+  if (st.state === "playing") return pausePlayback();
+  if (st.state === "paused")  return resumePlayback();
+  return playCurrentTab();
+}
+
+async function playCurrentTab(startChunk) {
+  const tab = await activeTab();
+  if (!tab) return;
+  const data = await extractFromTab(tab.id);
+  if (!data || !data.text) return;
+  await startPlayback(await pagePlayPayload(tab, data, startChunk));
+}
+
+chrome.commands.onCommand.addListener((command) => {
+  (async () => {
+    switch (command) {
+      case "play-pause":    await handlePlayPauseCommand(); break;
+      case "stop":          await stopPlayback();           break;
+      case "save-to-queue": {
+        const tab = await activeTab();
+        if (tab) await addCurrentToQueue(tab.id);
+        break;
+      }
+      default: break;
+    }
+  })();
+});
+
+// Context menu: "Read from here" (activeTab context — no new broad
+// permissions). removeAll + create inside onInstalled is the
+// duplicate-safe registration pattern (extension updates re-fire it).
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id:       "pv-read-from-here",
+      title:    "Read from here",
+      contexts: ["selection", "page"],
+    });
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info?.menuItemId !== "pv-read-from-here") return;
+  handleReadFromHere(tab).catch(() => {});
+});
+
+// No anchor / no extractable text → the content script answers ok:false,
+// and playback simply does not start. An anchor the article does not
+// contain answers startChunk 0 — read from the top, never a wrong jump.
+async function handleReadFromHere(tab) {
+  if (!tab || typeof tab.id !== "number") return;
+  const response = await getReadFromHereFromTab(tab.id);
+  if (!response || !response.ok || !response.text) return;
+  await startPlayback(await pagePlayPayload(tab, response, response.startChunk));
+}
+
+function getReadFromHereFromTab(tabId) {
+  return new Promise(async (resolve) => {
+    // Same injection pattern as extractFromTab: a no-op when the content
+    // script is already on the page (window guard in content.js).
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    } catch (_) {}
+    await sleep(200);
+    chrome.tabs.sendMessage(tabId, { target: "content", type: "getReadFromHere" }, (response) => {
+      if (chrome.runtime.lastError) return resolve(null);
+      resolve(response);
+    });
+  });
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

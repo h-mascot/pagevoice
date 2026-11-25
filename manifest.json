@@ -3,7 +3,7 @@
   "name": "PageVoice",
   "version": "2.1.0",
   "description": "Read articles aloud — Edge TTS, OpenAI, ElevenLabs, or local TTS",
-  "permissions": ["storage", "activeTab", "scripting", "offscreen", "tabs"],
+  "permissions": ["storage", "activeTab", "scripting", "offscreen", "tabs", "contextMenus"],
   "host_permissions": [
     "https://api.elevenlabs.io/*",
     "https://api.openai.com/*",
@@ -26,10 +26,24 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["lib/pv-utils.js", "lib/pv-highlight.js", "content.js"],
+      "js": ["lib/pv-utils.js", "lib/pv-highlight.js", "lib/pv-shortcuts.js", "content.js"],
       "css": ["content-player.css"]
     }
   ],
+  "commands": {
+    "play-pause": {
+      "suggested_key": { "default": "Alt+Shift+P" },
+      "description": "Play or pause reading"
+    },
+    "stop": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Stop reading"
+    },
+    "save-to-queue": {
+      "suggested_key": { "default": "Alt+Shift+Q" },
+      "description": "Save this page to the listening queue"
+    }
+  },
   "icons": {
     "16": "icon-16.png",
     "48": "icon-48.png",

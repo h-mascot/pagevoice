@@ -39,6 +39,11 @@ WHY PEOPLE USE IT
 FEATURES
 • Smart article extraction — grabs the article, skips nav and clutter
 • Playback that survives closing the popup (offscreen audio)
+• Keyboard shortcuts — play/pause, stop, and save-to-queue without opening
+  the popup (defaults Alt+Shift+P / S / Q, rebindable at
+  chrome://extensions/shortcuts)
+• Read from here — right-click a paragraph, or select text and right-click,
+  to start listening at that point
 • Speed control from 0.5x to 3x
 • Floating mini-player on the page
 • Settings and voices persist across sessions

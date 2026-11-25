@@ -449,7 +449,7 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
 async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
   const voice  = voiceName || "en-GB-SoniaNeural";
   const spd    = speed || 1.0;
-  const chunks = buildTextChunks(text, 900); // Edge TTS works best with ~800-1000 char chunks
+  const chunks = buildTextChunks(text, engineChunkLen("edge")); // 900 — engineChunkLen is the single source shared with read-from-here
   const startAt = clampStartIndex(startChunk, chunks.length);
 
   for (let i = startAt; i < chunks.length; i++) {
@@ -511,7 +511,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
   }
 
   const effectiveVoice = voice || "nova";
-  const chunks         = buildTextChunks(text, 4000);
+  const chunks         = buildTextChunks(text, engineChunkLen("openai")); // 4000
   const startAt        = clampStartIndex(startChunk, chunks.length);
 
   for (let i = startAt; i < chunks.length; i++) {
@@ -572,7 +572,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
 async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
   const effectiveKey   = (apiKey && apiKey.trim()) || DEFAULT_ELEVENLABS_KEY;
   const effectiveVoice = voice || "21m00Tcm4TlvDq8ikWAM"; // Rachel
-  const chunks         = buildTextChunks(text, 2500);
+  const chunks         = buildTextChunks(text, engineChunkLen("elevenlabs")); // 2500
   const startAt        = clampStartIndex(startChunk, chunks.length);
 
   if (!effectiveKey) {
@@ -718,7 +718,7 @@ function sleep(ms) {
 
 async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
   const effectiveVoice = voice || "af_heart"; // default Kokoro voice
-  const chunks = buildTextChunks(text, 2500); // 2500 chars per chunk is fine
+  const chunks = buildTextChunks(text, engineChunkLen("kokoro")); // 2500
   const safeSpeed = clampKokoroSpeed(speedRate);
   const startAt = clampStartIndex(startChunk, chunks.length);
 
