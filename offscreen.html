@@ -5,11 +5,15 @@
   <title>PageVoice Offscreen</title>
 </head>
 <body>
-  <!-- pv-utils.js / pv-highlight.js must load first: their top-level
-       declarations are globals used by offscreen.js (and unit-tested in
-       Node via the colocated *.test.js files). -->
+  <!-- pv-utils.js / pv-highlight.js / pv-shortcuts.js must load first: their
+       top-level declarations are globals used by offscreen.js (and
+       unit-tested in Node via the colocated *.test.js files).
+       pv-shortcuts.js owns engineChunkLen() — the single source of the
+       per-engine chunk sizes, shared with content.js's read-from-here
+       start-chunk math. -->
   <script src="lib/pv-utils.js"></script>
   <script src="lib/pv-highlight.js"></script>
+  <script src="lib/pv-shortcuts.js"></script>
   <script src="offscreen.js"></script>
 </body>
 </html>

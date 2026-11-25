@@ -9,6 +9,8 @@ A Chrome extension that reads web articles aloud using text-to-speech. Supports 
 - 📖 **Smart Article Extraction** - Automatically extracts article content from any webpage
 - 🎙️ **Dual TTS Engines** - Switch between ElevenLabs and local browser voices
 - ⏯️ **Playback Controls** - Play, pause, stop, and resume reading
+- ⌨️ **Keyboard Shortcuts** - Play/pause, stop, and save-to-queue without opening the popup
+- 🎯 **Read From Here** - Right-click any paragraph (or select text) to start listening at that point
 - ⚡ **Speed Control** - Adjust reading speed from 0.5x to 2x
 - 💾 **Persistent Settings** - Your preferences are saved across sessions
 - 🌙 **Dark Mode UI** - Clean, modern interface
@@ -56,6 +58,30 @@ A Chrome extension that reads web articles aloud using text-to-speech. Supports 
 
 6. Click **▶️ Read** to start listening
 
+### Keyboard shortcuts
+
+PageVoice registers three global shortcuts that work even when the popup
+is closed (playback lives in an offscreen document, so audio survives):
+
+| Action | Default shortcut |
+|---|---|
+| Play / Pause | `Alt+Shift+P` |
+| Stop | `Alt+Shift+S` |
+| Save current page to the listening queue | `Alt+Shift+Q` |
+
+Play/Pause is a toggle: from a stopped state it starts reading the current
+page. Rebind any shortcut at `chrome://extensions/shortcuts` (the "Keyboard
+shortcuts" section at the bottom of the page) — keys are per-browser, and
+clashes with other extensions are resolved there too.
+
+### Read from here
+
+Don't want to start at the top? Right-click anywhere in the paragraph you
+want to start from and choose **Read from here** — or select some text
+first and right-click inside the selection; playback then starts at the
+sentence your selection begins at. Works together with the floating
+mini-player: it appears on the page with the usual controls.
+
 ### ElevenLabs Setup
 
 To use ElevenLabs voices:
@@ -78,7 +104,8 @@ Uses your system's built-in voices. Options vary by operating system.
 ## Technical Details
 
 - **Manifest Version:** 3 (MV3)
-- **Permissions:** storage, activeTab, scripting
+- **Permissions:** storage, activeTab, scripting, offscreen, tabs, contextMenus
+- **Keyboard commands:** play-pause, stop, save-to-queue (see `commands` in manifest.json)
 - **Host Permissions:** https://api.elevenlabs.io/*
 
 ## Development

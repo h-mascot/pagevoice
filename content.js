@@ -4,6 +4,9 @@
  * Responsibilities:
  *  1. Extract article text and page title on request.
  *  2. Inject / update / remove the floating mini-player.
+ *  3. Anchor "read from here" (issue #6): record the right-clicked
+ *     paragraph, and answer background's getReadFromHere with the chunk
+ *     (in the active engine's chunking) the selection/paragraph points at.
  *
  * Wrapped in IIFE to prevent redeclaration errors when injected
  * both via manifest content_scripts and chrome.scripting.executeScript.
@@ -71,6 +74,84 @@ function extractArticleData() {
   return { text, title, elements };
 }
 
+// ─── Read From Here anchor (issue #6) ────────────────────────────────────────
+//
+// The contextmenu event is recorded (capture phase) so the menu click can
+// ask which paragraph was right-clicked; a non-collapsed selection always
+// takes priority over the paragraph. background → content getReadFromHere
+// is answered with { ok, text, title, startChunk }: the chunk — in the
+// ACTIVE engine's chunking (lib/pv-shortcuts.js engineChunkLen, the same
+// source offscreen.js plays with) — covering the sentence the anchor points
+// at. An anchor missing from the article reads from the top (startChunk 0),
+// never a jump to a wrong position.
+
+let lastContextMenuTarget = null;
+
+document.addEventListener("contextmenu", (e) => {
+  lastContextMenuTarget = e.target;
+}, true);
+
+// The anchor text prefix: the user's selection, else the right-clicked
+// block's text. Returns null when there is no usable anchor.
+function readFromHerePrefix() {
+  // Priority 1: a non-collapsed selection — "read from here" means from
+  // the start of the selection.
+  try {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+      const t = (sel.toString() || "").trim();
+      if (t.length > 0) return t.slice(0, 80);
+    }
+  } catch (_) { /* selection unavailable — fall through to the paragraph */ }
+
+  // Priority 2: the paragraph that was right-clicked.
+  const target = lastContextMenuTarget;
+  if (target && typeof target.closest === "function") {
+    const block = target.closest(PV_HIGHLIGHT_BLOCK_SELECTOR) || target;
+    if (block.closest && block.closest("#__pagevoice_player__")) return null; // player UI is not an anchor
+    const t = (block.innerText || "").trim();
+    if (t.length > 0) return t.slice(0, 80);
+  }
+  return null;
+}
+
+// startChunk for an anchor prefix, computed against the active engine's
+// chunking. Local/unknown engines are sentence-indexed (one utterance per
+// sentence). Pure modules missing (content.js injected standalone without
+// the lib chain) → 0: read from the top, never a wrong jump.
+function readFromHereStartChunk(text, prefix, engine) {
+  if (typeof splitIntoSentences !== "function" ||
+      typeof buildTextChunks !== "function" ||
+      typeof readStartChunkFromParts !== "function" ||
+      typeof engineChunkLen !== "function" ||
+      typeof sentenceChunksFromSentences !== "function") {
+    return 0;
+  }
+  const sentences = splitIntoSentences(text);
+  const len = engineChunkLen(engine);
+  const chunks = len
+    ? buildTextChunks(text, len)
+    : sentenceChunksFromSentences(sentences);
+  return readStartChunkFromParts(sentences, chunks, prefix);
+}
+
+async function getReadFromHereResponse() {
+  const data = extractArticleData();
+  if (!data || !data.text) return { ok: false, error: "no-text" };
+
+  let startChunk = 0;
+  const prefix = readFromHerePrefix();
+  if (prefix) {
+    let engine = "edge";
+    try {
+      const settings = await chrome.storage.sync.get(["engine"]);
+      engine = settings?.engine || "edge";
+    } catch (_) {}
+    startChunk = readFromHereStartChunk(data.text, prefix, engine);
+  }
+  return { ok: true, text: data.text, title: data.title, startChunk };
+}
+
 // ─── Message Listener ─────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -84,6 +165,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const { text } = extractArticleData();
     sendResponse({ text });
     return true;
+  }
+
+  if (request.target === "content" && request.type === "getReadFromHere") {
+    getReadFromHereResponse()
+      .then((response) => sendResponse(response))
+      .catch(() => sendResponse({ ok: false, error: "read-from-here failed" }));
+    return true; // async sendResponse
   }
 
   if (request.target === "content" && request.type === "playerUpdate") {
