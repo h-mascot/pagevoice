@@ -532,3 +532,63 @@ body {
   margin-top: 5px;
   line-height: 1.4;
 }
+
+/* ─── Kokoro local-server status (issue #7) ───────────────────────── */
+
+.kokoro-status-group {
+  padding: 10px 12px;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  background: #1a1a1a;
+}
+
+.kokoro-status-line {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #bbb;
+  margin-bottom: 8px;
+}
+
+.kokoro-status-line.status-ok {
+  color: #7fc98f;
+}
+
+.kokoro-status-line.status-err {
+  color: #e08585;
+}
+
+.kokoro-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kokoro-check-btn {
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.kokoro-check-btn:hover {
+  background: #333;
+}
+
+.kokoro-setup-link {
+  font-size: 12px;
+  color: #4a9eff;
+  text-decoration: none;
+}
+
+.kokoro-setup-link:hover {
+  text-decoration: underline;
+}
+
+.badge.live {
+  background: #0a3a1a;
+  color: #3fc87a;
+  border: 1px solid #1a5c32;
+}

@@ -24,14 +24,10 @@ const EDGE_VOICES = [
   { value: "en-AU-WilliamNeural", label: "Russell (AU Male)" },
 ];
 
-const KOKORO_VOICES = [
-  { value: "af_heart", label: "Heart (US Female)" },
-  { value: "af_bella", label: "Bella (US Female)" },
-  { value: "am_michael", label: "Michael (US Male)" },
-  { value: "bf_alice", label: "Alice (British Female)" },
-  { value: "bf_emma", label: "Emma (British Female)" },
-  { value: "bm_george", label: "George (British Male)" },
-];
+// Kokoro's voice list is NOT hardcoded here anymore (issue #7): it comes
+// from the running server's /v1/voices when reachable (see
+// refreshKokoroStatus) and falls back to lib/pv-kokoro.js's curated
+// defaults otherwise — resolveKokoroVoiceOptions handles both.
 
 const OPENAI_VOICES = [
   { value: "nova",    label: "Nova (Female, Warm)" },
@@ -150,6 +146,10 @@ const saveQueueBtn  = document.getElementById("saveQueueBtn");
 const pdfImportBtn  = document.getElementById("pdfImportBtn");
 const pdfFileInput  = document.getElementById("pdfFileInput");
 const pdfImportStatus = document.getElementById("pdfImportStatus");
+const kokoroStatusLine = document.getElementById("kokoroStatusLine");
+const kokoroCheckBtn   = document.getElementById("kokoroCheckBtn");
+const kokoroSetupLink  = document.getElementById("kokoroSetupLink");
+const kokoroLive       = document.getElementById("kokoroLive");
 
 const playBtn       = document.getElementById("playBtn");
 const pauseBtn      = document.getElementById("pauseBtn");
@@ -177,6 +177,10 @@ const elevenSaved    = document.getElementById("elevenSaved");
 let uiState      = "stopped"; // 'stopped' | 'playing' | 'paused'
 let currentEngine = "edge";
 let activeTabId   = null;
+// Last Kokoro server probe (issue #7): { reachable, voices, failure,
+// checkedAt } from background's kokoroStatus, or null before the first
+// probe completes. Voice list + settings status line both key off it.
+let kokoroProbe   = null;
 
 // ─── Initialise ───────────────────────────────────────────────────────────────
 
@@ -221,6 +225,9 @@ function showView(view) {
 
 settingsBtn.addEventListener("click", () => {
   showView(settingsView);
+  // Live engine status (issue #7): re-probe every time settings open —
+  // a local server can start/stop between popup opens.
+  refreshKokoroStatus();
 });
 
 backBtn.addEventListener("click", () => {
@@ -294,7 +301,11 @@ function populateVoices(engine, savedVoice) {
     restoreVoice(savedVoice || "21m00Tcm4TlvDq8ikWAM");
 
   } else if (engine === "kokoro") {
-    KOKORO_VOICES.forEach(({ value, label }) => addOption(voiceSelect, value, label));
+    // Server list when the last probe found it; curated defaults otherwise
+    // (issue #7). Server labels are derived from the id prefix in
+    // lib/pv-kokoro.js, so unseen voices still label correctly.
+    const options = resolveKokoroVoiceOptions(kokoroProbe?.voices);
+    options.forEach(({ value, label }) => addOption(voiceSelect, value, label));
     restoreVoice(savedVoice || "bf_alice");
 
   } else if (engine === "local") {
@@ -340,6 +351,45 @@ function loadLocalVoices(savedVoice) {
 
 voiceSelect.addEventListener("change", () => {
   chrome.storage.sync.set({ voice: voiceSelect.value });
+});
+
+// ─── Kokoro Local Server status (issue #7) ────────────────────────────────────
+//
+// The probe itself runs in background's service worker (message
+// "kokoroStatus") so closing the popup mid-probe aborts nothing. Pure
+// copy/parse helpers come from lib/pv-kokoro.js. When the server is
+// unreachable the setup guide link appears; when reachable, the engine
+// entry gets a live ✓ badge and the voice picker uses the server's list.
+
+async function refreshKokoroStatus() {
+  kokoroStatusLine.textContent = "Checking…";
+  kokoroStatusLine.classList.remove("status-ok", "status-err");
+  try {
+    const res = await chrome.runtime.sendMessage({ target: "background", type: "kokoroStatus" });
+    kokoroProbe = res?.ok ? res.payload : null;
+  } catch (_) {
+    kokoroProbe = null; // background unreachable — leave defaults in play
+  }
+  renderKokoroStatus();
+  // Re-populate so the picker reflects the server list (or defaults).
+  if (currentEngine === "kokoro") {
+    populateVoices("kokoro", voiceSelect.value || null);
+  }
+}
+
+function renderKokoroStatus() {
+  const p = kokoroProbe;
+  kokoroStatusLine.textContent = kokoroStatusText(p);
+  const reachable = !!(p && p.reachable);
+  kokoroStatusLine.classList.toggle("status-ok", reachable);
+  kokoroStatusLine.classList.toggle("status-err", !reachable && !!p);
+  // Setup guide is linked exactly when the server is unreachable.
+  kokoroSetupLink.hidden = reachable;
+  kokoroLive.hidden = !reachable;
+}
+
+kokoroCheckBtn.addEventListener("click", () => {
+  refreshKokoroStatus();
 });
 
 // ─── Speed ────────────────────────────────────────────────────────────────────

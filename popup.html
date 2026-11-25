@@ -90,8 +90,21 @@
           </label>
           <label class="engine-option">
             <input type="radio" name="engine" value="kokoro" id="engineKokoro">
-            <span class="engine-name">Kokoro TTS <em class="badge free">local</em></span>
+            <span class="engine-name">Kokoro TTS <em class="badge free">local</em><em id="kokoroLive" class="badge live" hidden>✓ running</em></span>
           </label>
+        </div>
+      </div>
+
+      <!-- Kokoro local-server status (issue #7): live probe + one-page setup
+           guide linked when the server is not running. -->
+      <div class="setting-group kokoro-status-group">
+        <div class="setting-label">Kokoro Local Server</div>
+        <div id="kokoroStatusLine" class="kokoro-status-line">Checking…</div>
+        <div class="kokoro-actions">
+          <button id="kokoroCheckBtn" class="kokoro-check-btn" type="button">Check again</button>
+          <a id="kokoroSetupLink" class="kokoro-setup-link" hidden
+             href="https://github.com/h-mascot/pagevoice/blob/main/docs/kokoro-setup.md"
+             target="_blank" rel="noopener">Setup guide (2 steps) ↗</a>
         </div>
       </div>
 
@@ -137,6 +150,8 @@
     </div>
   </div>
 
+  <!-- lib/pv-kokoro.js: Kokoro probe/voice-list pure logic (issue #7). -->
+  <script src="lib/pv-kokoro.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -21,6 +21,22 @@ print("Loading Kokoro pipeline...")
 pipeline = KPipeline(lang_code='a')
 print("Kokoro pipeline loaded.")
 
+# Known Kokoro v1.0 English voices (KPipeline lang_code 'a'/'b').
+# GET /v1/voices is the PageVoice extension's liveness probe AND its
+# voice-list source (issue #7): any HTTP response here means the server
+# process is alive; only connection errors mean "not running".
+KOKORO_VOICES = [
+    "af_heart", "af_bella", "af_nicole", "af_aoede", "af_kore",
+    "af_sarah", "af_nova", "af_sky",
+    "am_adam", "am_michael", "am_onyx", "am_puck",
+    "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+    "bm_fable", "bm_george", "bm_lewis",
+]
+
+@app.get("/v1/voices")
+async def list_voices():
+    return {"voices": KOKORO_VOICES}
+
 @app.post("/v1/text-to-speech/{voice_id}")
 async def generate_speech(voice_id: str, request: Request):
     data = await request.json()
