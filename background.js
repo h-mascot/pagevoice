@@ -26,9 +26,16 @@
  * (key QUEUE_STORAGE_KEY, schema-versioned by lib/pv-queue.js). Queue logic
  * is pure and unit-tested in lib/pv-queue.test.js; this file only wires it
  * to storage, messages, and playback.
+ *
+ * PDF import (issue #5): the popup picks the file and sends the bytes to
+ * "pdfImport"; background owns the whole import (so it completes even if
+ * the popup closes), extraction happens in the offscreen document via
+ * "pdf-extract" (vendored pdf.js), and the text joins the listening queue
+ * like any article. lib/pv-pdf.js is the pure, unit-tested core.
  */
 
 importScripts("lib/pv-queue.js");
+importScripts("lib/pv-pdf.js");
 
 const OFFSCREEN_URL = chrome.runtime.getURL("offscreen.html");
 
@@ -162,6 +169,57 @@ async function addCurrentToQueue(tabId) {
   await saveQueue(next);
   await broadcastQueue();
   return { ok: true, item: added };
+}
+
+// ─── PDF import (issue #5) ────────────────────────────────────────────────────
+//
+// The popup picks the file and hands the raw bytes here; background owns the
+// whole import so it completes even if the popup closes mid-extract. Text
+// extraction runs in the offscreen document (pdf.js vendored, lazy-loaded
+// there); the result joins the listening queue like any article and plays
+// through the standard chunking pipeline.
+
+async function extractPdfInOffscreen(buffer) {
+  await ensureOffscreenDocument();
+  return chrome.runtime
+    .sendMessage({ target: "offscreen", type: "pdf-extract", payload: { buffer } })
+    .catch(() => null); // offscreen crashed / channel gone → handled below
+}
+
+async function importPdfToQueue(payload) {
+  const buffer = payload?.buffer;
+  const name   = typeof payload?.name === "string" ? payload.name : "";
+
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength === 0) {
+    return { ok: false, error: "No PDF data received — pick the file again." };
+  }
+  const sizeCheck = validatePdfSize(buffer.byteLength); // fast 50 MB guard before any work
+  if (!sizeCheck.ok) {
+    return { ok: false, code: sizeCheck.code, error: PDF_ERRORS[sizeCheck.code] };
+  }
+
+  const result = await extractPdfInOffscreen(buffer);
+  if (!result) {
+    return { ok: false, code: "load-failed", error: PDF_ERRORS["load-failed"] };
+  }
+  if (!result.ok) {
+    return { ok: false, code: result.code, error: result.error };
+  }
+
+  const title = titleFromFilename(name);
+  const queue = await loadQueue();
+  const { queue: next, item } = addToQueue(queue, {
+    title,
+    url:   `pdf:${name || title}`,
+    text:  result.text,
+  });
+  if (!item) {
+    return { ok: false, code: "no-text", error: PDF_ERRORS["no-text"] };
+  }
+
+  await saveQueue(next);
+  await broadcastQueue();
+  return { ok: true, item: { id: item.id, title: item.title }, pages: result.pages };
 }
 
 // Build the play payload from the user's saved settings (queue playback
@@ -433,6 +491,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "queuePlay": {
         const started = await playQueueItem(message.payload?.id);
         sendResponse({ ok: started, error: started ? undefined : "Queue item not found." });
+        break;
+      }
+
+      // ── PDF import (issue #5) ────────────────────────────────────────────
+      // payload: { buffer: ArrayBuffer, name: string }. Response: the queue
+      // item (success) or operator-facing error copy (see lib/pv-pdf.js).
+      case "pdfImport": {
+        sendResponse(await importPdfToQueue(message.payload));
         break;
       }
 

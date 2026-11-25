@@ -472,6 +472,36 @@ body {
   line-height: 1.6;
 }
 
+/* ─── PDF import (issue #5) ───────────────────────────────────────── */
+
+.pdf-import-status {
+  margin: 0 0 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  color: #bbb;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pdf-import-status.error {
+  border-color: #5c2a2a;
+  color: #e08585;
+}
+
+.pdf-import-status.done {
+  border-color: #2a5c38;
+  color: #7fc98f;
+}
+
+#queue-view.drop-target .queue-list,
+#queue-view.drop-target .queue-empty {
+  outline: 2px dashed #0a6cff;
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
 /* ─── Highlight toggle (issue #4) ─────────────────────────────────── */
 
 .setting-toggle {

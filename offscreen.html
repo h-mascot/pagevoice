@@ -10,10 +10,15 @@
        unit-tested in Node via the colocated *.test.js files).
        pv-shortcuts.js owns engineChunkLen() — the single source of the
        per-engine chunk sizes, shared with content.js's read-from-here
-       start-chunk math. -->
+       start-chunk math.
+       pv-pdf.js owns the PDF import logic (issue #5); pdf.js itself is NOT
+       statically loaded — offscreen.js lazy-loads the vendored pair from
+       vendor/pdfjs/ on the first pdf-extract request so audio playback
+       never pays the parse cost. -->
   <script src="lib/pv-utils.js"></script>
   <script src="lib/pv-highlight.js"></script>
   <script src="lib/pv-shortcuts.js"></script>
+  <script src="lib/pv-pdf.js"></script>
   <script src="offscreen.js"></script>
 </body>
 </html>

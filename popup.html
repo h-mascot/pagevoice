@@ -40,13 +40,23 @@
     <div class="header">
       <button id="queueBackBtn" class="icon-btn" title="Back">←</button>
       <span class="app-title">🎧 Listening Queue</span>
+      <div class="header-actions">
+        <button id="pdfImportBtn" class="icon-btn" title="Import a PDF file into the queue">📄</button>
+      </div>
     </div>
+
+    <div id="pdfImportStatus" class="pdf-import-status" hidden></div>
 
     <div id="queueList" class="queue-list"></div>
     <div id="queueEmpty" class="queue-empty">
       Queue is empty.<br>
-      Open an article and press “＋ Save to queue”.
+      Open an article and press “＋ Save to queue”,<br>
+      or drop a PDF here / press 📄 to import one.
     </div>
+
+    <!-- PDF import (issue #5): picked by 📄, validated, extracted by
+         background + offscreen, then queued like an article. -->
+    <input type="file" id="pdfFileInput" accept="application/pdf" hidden>
   </div>
 
   <!-- ─── Settings View ─────────────────────────────────────────────────── -->

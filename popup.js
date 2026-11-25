@@ -147,6 +147,9 @@ const queueList     = document.getElementById("queueList");
 const queueEmpty    = document.getElementById("queueEmpty");
 const queueCount    = document.getElementById("queueCount");
 const saveQueueBtn  = document.getElementById("saveQueueBtn");
+const pdfImportBtn  = document.getElementById("pdfImportBtn");
+const pdfFileInput  = document.getElementById("pdfFileInput");
+const pdfImportStatus = document.getElementById("pdfImportStatus");
 
 const playBtn       = document.getElementById("playBtn");
 const pauseBtn      = document.getElementById("pauseBtn");
@@ -558,6 +561,97 @@ function playQueueItem(id) {
   );
 }
 
+// ─── PDF import (issue #5) ───────────────────────────────────────────────────
+//
+// 📄 button or drag-drop → file → size guard → ArrayBuffer → background
+// "pdfImport". Background owns the rest (offscreen pdf.js extraction, queue
+// add, broadcastQueue), so the import survives this popup closing mid-extract;
+// the only thing living here is UI state: progress, success and error lines.
+
+const PDF_MAX_BYTES_POPUP = 50 * 1024 * 1024;
+
+const pdfImport = { importing: false };
+
+function setPdfStatus(text, kind = "") {
+  pdfImportStatus.hidden = !text;
+  pdfImportStatus.textContent = text || "";
+  pdfImportStatus.className = "pdf-import-status" + (kind ? " " + kind : "");
+}
+
+function isPdfFile(file) {
+  return Boolean(file) &&
+    (file.type === "application/pdf" || /\.pdf$/i.test(file.name || ""));
+}
+
+async function importPdfFile(file) {
+  if (pdfImport.importing) return;
+  if (!isPdfFile(file)) {
+    setPdfStatus("That doesn't look like a PDF file.", "error");
+    return;
+  }
+  if (file.size > PDF_MAX_BYTES_POPUP) {
+    setPdfStatus("PDF is larger than 50 MB — please use a smaller file.", "error");
+    return;
+  }
+
+  pdfImport.importing = true;
+  pdfImportBtn.disabled = true;
+  setPdfStatus(`Reading “${file.name}”…`);
+  try {
+    const buffer = await file.arrayBuffer();
+    setPdfStatus("Extracting text…");
+    chrome.runtime.sendMessage(
+      { target: "background", type: "pdfImport", payload: { buffer, name: file.name } },
+      (res) => {
+        pdfImport.importing = false;
+        pdfImportBtn.disabled = false;
+        if (chrome.runtime.lastError || !res) {
+          setPdfStatus("Import failed — the extension did not respond. Try again.", "error");
+          return;
+        }
+        if (!res.ok) {
+          setPdfStatus(res.error || "PDF import failed.", "error");
+          return;
+        }
+        const pages = res.pages || "?";
+        setPdfStatus(`Added “${res.item.title}” (${pages} page${pages === 1 ? "" : "s"}) to the queue ✓`, "done");
+        renderQueue(); // the queueUpdate broadcast also refreshes; this covers the race
+      }
+    );
+  } catch (_) {
+    pdfImport.importing = false;
+    pdfImportBtn.disabled = false;
+    setPdfStatus("Could not read the file — try again.", "error");
+  }
+}
+
+pdfImportBtn.addEventListener("click", () => pdfFileInput.click());
+
+pdfFileInput.addEventListener("change", () => {
+  const file = pdfFileInput.files && pdfFileInput.files[0];
+  pdfFileInput.value = ""; // allow re-picking the same file
+  if (file) importPdfFile(file);
+});
+
+// Drag-drop target: the whole queue view (dragleave/drop clear the highlight).
+["dragenter", "dragover"].forEach((evt) => {
+  queueView.addEventListener(evt, (e) => {
+    e.preventDefault();
+    if (pdfImport.importing) return;
+    queueView.classList.add("drop-target");
+  });
+});
+["dragleave", "drop"].forEach((evt) => {
+  queueView.addEventListener(evt, (e) => {
+    e.preventDefault();
+    queueView.classList.remove("drop-target");
+  });
+});
+queueView.addEventListener("drop", (e) => {
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) importPdfFile(file);
+});
+
 saveQueueBtn.addEventListener("click", () => {
   saveQueueBtn.disabled = true;
   (async () => {
@@ -597,6 +691,12 @@ chrome.runtime.onMessage.addListener((message) => {
     queueData = message.payload;
     updateQueueBadge();
     if (queueView.classList.contains("active")) renderQueue();
+  }
+  if (message.type === "pdfImportProgress" && message.payload) {
+    const { page, total } = message.payload;
+    if (pdfImport.importing) {
+      setPdfStatus(`Extracting PDF — page ${page} of ${total}…`);
+    }
   }
 });
 
