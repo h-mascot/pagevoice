@@ -11,6 +11,7 @@ A Chrome extension that reads web articles aloud using text-to-speech. Supports 
 - ⏯️ **Playback Controls** - Play, pause, stop, and resume reading
 - ⌨️ **Keyboard Shortcuts** - Play/pause, stop, and save-to-queue without opening the popup
 - 🎯 **Read From Here** - Right-click any paragraph (or select text) to start listening at that point
+- 🖥️ **Kokoro Local Voice** - Free self-hosted TTS with one-click detection and graceful fallback — see the [setup guide](docs/kokoro-setup.md)
 - ⚡ **Speed Control** - Adjust reading speed from 0.5x to 2x
 - 💾 **Persistent Settings** - Your preferences are saved across sessions
 - 🌙 **Dark Mode UI** - Clean, modern interface

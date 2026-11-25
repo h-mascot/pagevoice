@@ -16,7 +16,9 @@
  */
 
 const DEFAULT_ELEVENLABS_KEY = "";
-const KOKORO_BASE_URL = "http://127.0.0.1:8881";
+// KOKORO_BASE_URL + probe helpers live in lib/pv-kokoro.js (loaded first
+// by offscreen.html); the 60s TTS request timeout stays here — synthesis
+// of a large chunk legitimately takes seconds, unlike the fast probe.
 const KOKORO_REQUEST_TIMEOUT_MS = 60000;
 
 // ─── Playback state ───────────────────────────────────────────────────────────
@@ -804,6 +806,27 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
   const safeSpeed = clampKokoroSpeed(speedRate);
   const startAt = clampStartIndex(startChunk, chunks.length);
 
+  // Empty text: nothing to synthesize — same finish contract as every
+  // other engine (and no probe).
+  if (chunks.length === 0) {
+    reportState("stopped", "Finished ✓");
+    return;
+  }
+
+  // Pre-playback probe (issue #7): fail fast with a clear fallback when
+  // the server is down, instead of making the operator wait out the
+  // 60s TTS timeout to learn the same thing.
+  const probe = await probeKokoroServer();
+  if (isStopped) return;
+  if (!probe.reachable && shouldFallbackToBrowserLocal(probe.failure)) {
+    fallbackFromChunk(startAt, probe.failure);
+    return;
+  }
+  if (!probe.reachable) {
+    reportState("stopped", `Kokoro server at ${KOKORO_BASE_URL} is misbehaving (${probe.failure})`);
+    return;
+  }
+
   for (let i = startAt; i < chunks.length; i++) {
     if (isStopped) return;
     while (isPaused && !isStopped) { await sleep(100); }
@@ -836,9 +859,18 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
       if (isStopped) return;
     } catch (err) {
       if (isStopped) return;
-      const message = err?.message && /Failed to fetch/i.test(err.message)
-        ? `Kokoro server unavailable at ${KOKORO_BASE_URL} — start kokoro_server.py first`
-        : err?.message && /timed out/i.test(err.message)
+
+      // Server died mid-playback (or first request after a racing
+      // shutdown): same contract as Edge TTS's network fallback — resume
+      // Browser Local playback from the failing chunk's first sentence
+      // with a non-blocking notice. HTTP-level errors stay honest errors.
+      const failure = classifyKokoroFailure(err);
+      if (shouldFallbackToBrowserLocal(failure)) {
+        fallbackFromChunk(i, failure);
+        return;
+      }
+
+      const message = err?.message && /timed out/i.test(err.message)
           ? `Kokoro request timed out after ${Math.round(KOKORO_REQUEST_TIMEOUT_MS / 1000)}s`
         : `Kokoro error: ${err.message}`;
       reportState("stopped", message);
@@ -847,6 +879,35 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
   }
 
   if (!isStopped) {
-    reportState("stopped", "Finished");
+    reportState("stopped", "Finished ✓");
+  }
+
+  // Browser-Local fallback: plays the remaining Kokoro chunks' text,
+  // sentence-anchored so word highlighting stays at the right page
+  // offsets (sentenceBase = global index of the first sentence in the
+  // slice). Mirrors the Edge TTS fallback contract.
+  async function fallbackFromChunk(i, failure) {
+    reportState("playing", kokoroFallbackNotice(failure), {
+      chunk: i + 1, totalChunks: chunks.length, engine: "local", fallback: true,
+    });
+    speakWithLocalTTS(
+      chunks.slice(i).map((c) => c.text).join(" "),
+      null, speedRate, 0, chunks[i].sentenceStart
+    );
+  }
+}
+
+// Liveness probe: any HTTP response (even a 404 from an older server
+// without /v1/voices) means the process is alive — only connection
+// errors and probe timeouts count as unreachable. The voice list is
+// parsed best-effort; playback never depends on it.
+async function probeKokoroServer() {
+  try {
+    const res = await fetchWithTimeout(kokoroVoicesUrl(), { method: "GET" }, KOKORO_PROBE_TIMEOUT_MS);
+    let voices = null;
+    try { voices = parseKokoroVoices(await res.text()); } catch (_) { /* best-effort */ }
+    return { reachable: true, voices };
+  } catch (err) {
+    return { reachable: false, failure: classifyKokoroFailure(err) };
   }
 }

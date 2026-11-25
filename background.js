@@ -8,6 +8,7 @@
  *
  * Message protocol (all messages carry `target`):
  *   popup     → background: getState | play | pause | resume | stop
+ *               | kokoroStatus (issue #7 probe: "Check again" + status line)
  *   offscreen → background: stateUpdate { state, statusText, chunk, totalChunks, engine }
  *   offscreen → background: highlightUpdate { engine, sentence, word } (issue #4)
  *   background → offscreen: play | pause | resume | stop
@@ -36,6 +37,7 @@
 
 importScripts("lib/pv-queue.js");
 importScripts("lib/pv-pdf.js");
+importScripts("lib/pv-kokoro.js");
 
 const OFFSCREEN_URL = chrome.runtime.getURL("offscreen.html");
 
@@ -220,6 +222,28 @@ async function importPdfToQueue(payload) {
   await saveQueue(next);
   await broadcastQueue();
   return { ok: true, item: { id: item.id, title: item.title }, pages: result.pages };
+}
+
+// ─── Kokoro server probe (issue #7) ────────────────────────────────────────────
+//
+// Settings status line + "Check again". Any HTTP response counts as
+// reachable (an older kokoro_server.py without /v1/voices answers 404);
+// only connection errors and probe timeouts are "not running". The voice
+// list is parsed best-effort by lib/pv-kokoro.js. Playback-side fallback
+// lives in offscreen.js (same library).
+async function probeKokoro() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KOKORO_PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetch(kokoroVoicesUrl(), { method: "GET", signal: controller.signal });
+    let voices = null;
+    try { voices = parseKokoroVoices(await res.text()); } catch (_) { /* best-effort */ }
+    return { reachable: true, voices, checkedAt: Date.now() };
+  } catch (err) {
+    return { reachable: false, failure: classifyKokoroFailure(err), checkedAt: Date.now() };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Build the play payload from the user's saved settings (queue playback
@@ -499,6 +523,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // item (success) or operator-facing error copy (see lib/pv-pdf.js).
       case "pdfImport": {
         sendResponse(await importPdfToQueue(message.payload));
+        break;
+      }
+
+      // ── Kokoro server status (issue #7) ─────────────────────────────────
+      // Settings "Check again" + status line. Runs in the service worker so
+      // the popup can close mid-probe. Response: { ok, payload: { reachable,
+      // voices, failure, checkedAt } } — pure logic in lib/pv-kokoro.js.
+      case "kokoroStatus": {
+        sendResponse({ ok: true, payload: await probeKokoro() });
         break;
       }
 
