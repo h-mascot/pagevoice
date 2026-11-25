@@ -81,6 +81,16 @@ Uses your system's built-in voices. Options vary by operating system.
 - **Permissions:** storage, activeTab, scripting
 - **Host Permissions:** https://api.elevenlabs.io/*
 
+## Development
+
+No build step — what's committed is what ships. Pure logic (text chunking,
+speed clamping, XML escaping) lives in `lib/pv-utils.js` with colocated tests:
+
+```bash
+npm test                # node --test (no dependencies required)
+bash scripts/ctrl-gate-runner.sh   # syntax checks + unit tests (same as CI)
+```
+
 ## File Structure
 
 ```
@@ -91,6 +101,7 @@ pagevoice/
 ├── offscreen.html/js   # Persistent audio playback (survives popup close)
 ├── content.js          # Article text extraction
 ├── content-player.css  # Floating mini-player styles
+├── lib/pv-utils.js     # Pure logic (chunking, speed clamps) + colocated tests
 ├── kokoro_server.py    # Optional self-hosted Kokoro TTS server (127.0.0.1:8881)
 ├── icon-*.png          # Toolbar + store icons
 ├── README.md           # This file
