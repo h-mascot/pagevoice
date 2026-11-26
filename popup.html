@@ -32,6 +32,14 @@
 
     <button id="saveQueueBtn" class="save-queue-btn" title="Save this page to your listening queue">＋ Save to queue</button>
 
+    <!-- Keyboard shortcuts (issue #16): visible hint surface for the
+         commands registered in manifest.json — "Read from here" was
+         previously discoverable only via the right-click context menu. -->
+    <div class="shortcut-hints">
+      <div class="shortcut-row"><span class="key">Alt+Shift+R</span> read from here (or select text on the page)</div>
+      <div class="shortcut-row"><span class="key">Alt+Shift+P</span> play/pause · <span class="key">Alt+Shift+S</span> stop · <span class="key">Alt+Shift+Q</span> save to queue</div>
+    </div>
+
     <div id="status" class="status-bar"></div>
   </div>
 
@@ -51,7 +59,8 @@
     <div id="queueEmpty" class="queue-empty">
       Queue is empty.<br>
       Open an article and press “＋ Save to queue”,<br>
-      or drop a PDF here / press 📄 to import one.
+      or drop a PDF here / press 📄 to import one.<br>
+      <span class="queue-empty-sub">Tip: you can also drop a PDF anywhere on the page you're reading.</span>
     </div>
 
     <!-- PDF import (issue #5): picked by 📄, validated, extracted by

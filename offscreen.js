@@ -221,20 +221,35 @@ function reportHighlight(engine, chunk, localSentence, word) {
 // position. Both are anchored to MEDIA time (currentTime), so highlighting
 // stays in sync at any playbackRate (0.5x–3x) — currentTime reaches a
 // word's media offset at the same media position regardless of rate.
+//
+// Issue #15: the event → word mapping is POSITION-based, not ordinal-based.
+// Bing WordBoundary events do not map 1:1 to whitespace tokens (numbers
+// expand: "1,000" → "one" + "thousand"), so counting events shifted the
+// ordinal for the rest of the chunk. Each event's spoken text is matched
+// into the chunk text (monotone cursor); the matched offset then resolves
+// to sentence + word. Unmatched events inherit the last matched offset.
+// The fraction path (no metadata) estimates the word from the media
+// fraction — per-sentence kokoro chunks keep that estimate inside the
+// sentence actually playing.
 function makeHighlightTracker(engine, chunk, wordEvents) {
   const sentences = splitIntoSentences(chunk.text);
+  const starts = sentenceStartOffsets(sentences);
+  const eventOffsets = Array.isArray(wordEvents) && wordEvents.length > 0
+    ? mapWordEventsToCharOffsets(chunk.text, wordEvents)
+    : null;
   return (mediaTimeSec, durationSec) => {
     if (isStopped) return;
-    let ordinal;
-    if (Array.isArray(wordEvents) && wordEvents.length > 0) {
-      ordinal = wordOrdinalAtMediaTime(wordEvents, mediaTimeSec);
+    let sw = null;
+    if (eventOffsets) {
+      const ordinal = wordOrdinalAtMediaTime(wordEvents, mediaTimeSec);
+      const off = ordinal >= 0 && ordinal < eventOffsets.length ? eventOffsets[ordinal] : -1;
+      sw = off >= 0 ? charOffsetToSentenceWord(sentences, starts, off) : null;
     } else if (Number.isFinite(durationSec) && durationSec > 0) {
       const fraction = Math.min(1, Math.max(0, mediaTimeSec / durationSec));
-      ordinal = wordOrdinalFromFraction(chunk.text, fraction);
+      sw = wordOrdinalToSentenceWord(sentences, wordOrdinalFromFraction(chunk.text, fraction));
     } else {
       return; // duration not known yet — wait for the next timeupdate
     }
-    const sw = wordOrdinalToSentenceWord(sentences, ordinal);
     if (sw) reportHighlight(engine, chunk, sw.sentence, sw.word);
   };
 }
@@ -533,7 +548,7 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
 async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
   const voice  = voiceName || "en-GB-SoniaNeural";
   const spd    = speed || 1.0;
-  const chunks = buildTextChunks(text, engineChunkLen("edge")); // 900 — engineChunkLen is the single source shared with read-from-here
+  const chunks = buildEngineChunks(text, "edge"); // single source shared with read-from-here (issue #15)
   const startAt = clampStartIndex(startChunk, chunks.length);
 
   for (let i = startAt; i < chunks.length; i++) {
@@ -595,7 +610,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
   }
 
   const effectiveVoice = voice || "nova";
-  const chunks         = buildTextChunks(text, engineChunkLen("openai")); // 4000
+  const chunks         = buildEngineChunks(text, "openai"); // single source (issue #15)
   const startAt        = clampStartIndex(startChunk, chunks.length);
 
   for (let i = startAt; i < chunks.length; i++) {
@@ -656,7 +671,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
 async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
   const effectiveKey   = (apiKey && apiKey.trim()) || DEFAULT_ELEVENLABS_KEY;
   const effectiveVoice = voice || "21m00Tcm4TlvDq8ikWAM"; // Rachel
-  const chunks         = buildTextChunks(text, engineChunkLen("elevenlabs")); // 2500
+  const chunks         = buildEngineChunks(text, "elevenlabs"); // single source (issue #15)
   const startAt        = clampStartIndex(startChunk, chunks.length);
 
   if (!effectiveKey) {
@@ -766,7 +781,11 @@ function speakWithLocalTTS(text, voiceName, speed, startChunk = 0, sentenceBase 
       if (isStopped) return;
       if (e.name && e.name !== "word") return;
       if (typeof e.charIndex !== "number") return;
-      const ordinal = wordOrdinalAtChar(sentences[index], e.charIndex);
+      // charIndex is into the RAW sentence string (original whitespace
+      // runs). Counting on the raw text is correct by construction; the
+      // normalized-position path shifts forward past multi-whitespace and
+      // the highlight runs ahead of the audio (issue #15).
+      const ordinal = wordOrdinalAtRawChar(sentences[index], e.charIndex);
       reportHighlight("local", { sentenceStart: sentenceBase }, index, ordinal);
     };
 
@@ -802,7 +821,10 @@ function sleep(ms) {
 
 async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
   const effectiveVoice = voice || "af_heart"; // default Kokoro voice
-  const chunks = buildTextChunks(text, engineChunkLen("kokoro")); // 2500
+  // Sentence-level chunks (issue #15): Kokoro audio has no word metadata,
+  // so the tracker estimates the word from the audio fraction — per-
+  // sentence chunks keep the estimate inside the sentence actually playing.
+  const chunks = buildEngineChunks(text, "kokoro");
   const safeSpeed = clampKokoroSpeed(speedRate);
   const startAt = clampStartIndex(startChunk, chunks.length);
 

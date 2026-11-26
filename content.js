@@ -80,7 +80,7 @@ function extractArticleData() {
 // ask which paragraph was right-clicked; a non-collapsed selection always
 // takes priority over the paragraph. background → content getReadFromHere
 // is answered with { ok, text, title, startChunk }: the chunk — in the
-// ACTIVE engine's chunking (lib/pv-shortcuts.js engineChunkLen, the same
+// ACTIVE engine's chunking (lib/pv-shortcuts.js buildEngineChunks, the same
 // source offscreen.js plays with) — covering the sentence the anchor points
 // at. An anchor missing from the article reads from the top (startChunk 0),
 // never a jump to a wrong position.
@@ -116,22 +116,18 @@ function readFromHerePrefix() {
 }
 
 // startChunk for an anchor prefix, computed against the active engine's
-// chunking. Local/unknown engines are sentence-indexed (one utterance per
-// sentence). Pure modules missing (content.js injected standalone without
-// the lib chain) → 0: read from the top, never a wrong jump.
+// chunking (buildEngineChunks — the SAME composition offscreen.js plays,
+// issue #15: kokoro is per-sentence). Pure modules missing (content.js
+// injected standalone without the lib chain) → 0: read from the top, never
+// a wrong jump.
 function readFromHereStartChunk(text, prefix, engine) {
   if (typeof splitIntoSentences !== "function" ||
-      typeof buildTextChunks !== "function" ||
-      typeof readStartChunkFromParts !== "function" ||
-      typeof engineChunkLen !== "function" ||
-      typeof sentenceChunksFromSentences !== "function") {
+      typeof buildEngineChunks !== "function" ||
+      typeof readStartChunkFromParts !== "function") {
     return 0;
   }
   const sentences = splitIntoSentences(text);
-  const len = engineChunkLen(engine);
-  const chunks = len
-    ? buildTextChunks(text, len)
-    : sentenceChunksFromSentences(sentences);
+  const chunks = buildEngineChunks(text, engine);
   return readStartChunkFromParts(sentences, chunks, prefix);
 }
 
@@ -190,6 +186,211 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync" || !changes.highlightEnabled) return;
   if (!changes.highlightEnabled.newValue) clearHighlight();
 });
+
+// ─── Read-from-here hint bubble (issue #16) ──────────────────────────────────
+//
+// "Read from here" was reachable only through the right-click context menu —
+// invisible unless you already knew it. Now a small bubble appears under an
+// active selection: it is clickable AND names the Alt+Shift+R shortcut, so
+// both paths stay discoverable. The bubble itself is never an anchor
+// (readFromHerePrefix prefers the selection, which is still active when the
+// bubble is clicked; a click on the bubble is a plain mouse event, not a
+// selection change).
+
+const READ_HINT_ID     = "__pagevoice_read_hint__";
+const READ_HINT_HIDE_MS = 8000;
+
+let readHintEl       = null;
+let readHintTimer    = null;
+let readHintHideTimer = null;
+
+function hideReadHint() {
+  if (readHintTimer) { clearTimeout(readHintTimer); readHintTimer = null; }
+  if (readHintHideTimer) { clearTimeout(readHintHideTimer); readHintHideTimer = null; }
+  if (readHintEl && readHintEl.parentNode) readHintEl.parentNode.removeChild(readHintEl);
+  readHintEl = null;
+}
+
+function showReadHint(rect) {
+  hideReadHint();
+  readHintEl = document.createElement("div");
+  readHintEl.id = READ_HINT_ID;
+  readHintEl.innerHTML = `▶ Read from here <span class="pv-hint-key">Alt+Shift+R</span>`;
+  readHintEl.addEventListener("mousedown", (e) => {
+    e.preventDefault(); // keep the selection alive for the anchor
+    e.stopPropagation();
+  });
+  readHintEl.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chrome.runtime.sendMessage(
+      { target: "background", type: "readFromHereShortcut" },
+      () => { /* background reports failures through the player state */ void chrome.runtime.lastError; }
+    );
+    hideReadHint();
+  });
+  document.body.appendChild(readHintEl);
+
+  // Position: under the selection, clamped into the viewport.
+  const hintRect = readHintEl.getBoundingClientRect();
+  let x = rect.left + rect.width / 2 - hintRect.width / 2;
+  let y = rect.bottom + 6;
+  x = Math.max(8, Math.min(x, window.innerWidth - hintRect.width - 8));
+  if (y + hintRect.height > window.innerHeight - 8) y = rect.top - hintRect.height - 6;
+  readHintEl.style.left = `${Math.round(x)}px`;
+  readHintEl.style.top  = `${Math.round(y)}px`;
+
+  readHintHideTimer = setTimeout(hideReadHint, READ_HINT_HIDE_MS);
+}
+
+// Debounced selectionchange: show the hint only for a real, non-trivial
+// selection on an extractable page. Collapsed/empty selections hide it.
+document.addEventListener("selectionchange", () => {
+  if (readHintTimer) clearTimeout(readHintTimer);
+  readHintTimer = setTimeout(() => {
+    readHintTimer = null;
+    let rect = null;
+    let text = "";
+    try {
+      const sel = window.getSelection();
+      text = sel ? (sel.toString() || "").trim() : "";
+      if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+        rect = sel.getRangeAt(0).getBoundingClientRect();
+      }
+    } catch (_) { /* selection unavailable */ }
+    // Same minimum as the read-from-here anchor itself (4 chars).
+    if (!rect || text.length < 4 || (rect.width === 0 && rect.height === 0)) {
+      hideReadHint();
+      return;
+    }
+    showReadHint(rect);
+  }, 250);
+});
+
+// Any click outside the bubble (or starting playback) dismisses it.
+document.addEventListener("mousedown", (e) => {
+  if (readHintEl && e.target && e.target.closest && !e.target.closest(`#${READ_HINT_ID}`)) {
+    hideReadHint();
+  }
+}, true);
+window.addEventListener("scroll", hideReadHint, { passive: true, capture: true });
+window.addEventListener("resize", hideReadHint, { passive: true });
+
+// ─── Page-level PDF drop target (issue #17) ─────────────────────────────────
+//
+// PDF drag-drop previously worked only on the popup's queue view — on the
+// page itself the browser just navigated to the file. Now a full-viewport
+// overlay appears while a file is dragged over the page; dropping a PDF
+// sends it through the SAME background import pipeline (pdfImport) the
+// popup uses, so extraction, validation and queueing behave identically.
+// The overlay is pointer-events: none, so the drag events keep targeting
+// the page and the enter/leave counter stays stable.
+
+const PDF_DROP_ID  = "__pagevoice_pdf_drop__";
+const PDF_TOAST_ID = "__pagevoice_toast__";
+const PDF_MAX_BYTES_CONTENT = 50 * 1024 * 1024; // mirrors lib/pv-pdf.js (authoritative guard is background-side)
+
+let pdfDropDepth = 0;
+let pdfDropEl    = null;
+
+function hidePdfDropOverlay() {
+  if (pdfDropEl && pdfDropEl.parentNode) pdfDropEl.parentNode.removeChild(pdfDropEl);
+  pdfDropEl = null;
+  pdfDropDepth = 0;
+}
+
+function showPdfDropOverlay() {
+  if (!pdfDropEl) {
+    pdfDropEl = document.createElement("div");
+    pdfDropEl.id = PDF_DROP_ID;
+    pdfDropEl.innerHTML = `<div class="pv-drop-card">📄<br><strong>Drop to add this PDF to your listening queue</strong><br><span>PageVoice extracts the text and queues it for playback</span></div>`;
+    document.body.appendChild(pdfDropEl);
+  }
+}
+
+function dragHasFiles(e) {
+  const types = e.dataTransfer && e.dataTransfer.types;
+  return !!(types && Array.from(types).includes("Files"));
+}
+
+document.addEventListener("dragenter", (e) => {
+  if (!dragHasFiles(e)) return;
+  pdfDropDepth += 1;
+  showPdfDropOverlay();
+});
+document.addEventListener("dragover", (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault(); // required for the drop to fire
+  showPdfDropOverlay();
+});
+document.addEventListener("dragleave", (e) => {
+  if (!dragHasFiles(e)) return;
+  pdfDropDepth -= 1;
+  if (pdfDropDepth <= 0) hidePdfDropOverlay();
+});
+document.addEventListener("dragend", hidePdfDropOverlay);
+document.addEventListener("drop", (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault();
+  hidePdfDropOverlay();
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) importDroppedPdf(file);
+});
+
+function importDroppedPdf(file) {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+  if (!isPdf) {
+    pageToast("Only PDF files can be imported.", true);
+    return;
+  }
+  if (file.size > PDF_MAX_BYTES_CONTENT) {
+    pageToast("PDF is larger than 50 MB — please use a smaller file.", true);
+    return;
+  }
+  pageToast(`Reading “${file.name}”…`);
+  (async () => {
+    try {
+      const buffer = await file.arrayBuffer();
+      chrome.runtime.sendMessage(
+        { target: "background", type: "pdfImport", payload: { buffer, name: file.name } },
+        (res) => {
+          void chrome.runtime.lastError;
+          if (!res || chrome.runtime.lastError) {
+            pageToast("Import failed — the extension did not respond. Try again.", true);
+            return;
+          }
+          if (!res.ok) {
+            pageToast(res.error || "PDF import failed.", true);
+            return;
+          }
+          const pages = res.pages || "?";
+          pageToast(`Added “${res.item.title}” (${pages} page${pages === 1 ? "" : "s"}) to the queue ✓`);
+        }
+      );
+    } catch (_) {
+      pageToast("Could not read the file — try again.", true);
+    }
+  })();
+}
+
+// Small in-page toast (bottom-right), used for import feedback.
+let pageToastTimer = null;
+function pageToast(text, isError = false) {
+  let el = document.getElementById(PDF_TOAST_ID);
+  if (!el) {
+    el = document.createElement("div");
+    el.id = PDF_TOAST_ID;
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.className = isError ? "pv-toast-error" : "";
+  if (pageToastTimer) clearTimeout(pageToastTimer);
+  pageToastTimer = setTimeout(() => {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    pageToastTimer = null;
+  }, isError ? 6000 : 4000);
+}
+
 
 // ─── Word Highlighting (issue #4) ────────────────────────────────────────────
 //
