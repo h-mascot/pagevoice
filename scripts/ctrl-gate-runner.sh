@@ -7,12 +7,12 @@ node --check background.js
 node --check content.js
 node --check offscreen.js
 node --check popup.js
-node --check lib/pv-utils.js
-node --check lib/pv-queue.js
-node --check lib/pv-highlight.js
-node --check lib/pv-shortcuts.js
-node --check lib/pv-pdf.js
-node --check lib/pv-kokoro.js
+# Glob, not a hardcoded list: a new lib module must never skip the gate
+# (lib/pv-transport.js was added in the round-2 wave and was not covered).
+for f in lib/pv-*.js; do
+  node --check "$f"
+done
+node --check scripts/verify-zip-contents.js
 
 if [ -f kokoro_server.py ]; then
   echo "[ctrl] Checking Python syntax"

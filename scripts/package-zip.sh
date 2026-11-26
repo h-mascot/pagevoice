@@ -21,12 +21,20 @@ RUNTIME_FILES=(
   offscreen.html offscreen.js
   popup.html popup.js popup.css
   content.js content-player.css
-  lib/pv-utils.js
-  lib/pv-queue.js
-  lib/pv-highlight.js
-  lib/pv-shortcuts.js
-  lib/pv-pdf.js
-  lib/pv-kokoro.js
+)
+
+# Every lib/pv-*.js pure module except colocated tests. Globbed on purpose:
+# v2.2.2's first build shipped a zip missing lib/pv-transport.js while
+# offscreen.html and the manifest referenced it, so the extension would have
+# loaded with a broken PDF import. A glob can't forget a new module.
+for f in lib/pv-*.js; do
+  case "$f" in
+    *.test.js) ;;
+    *) RUNTIME_FILES+=("$f") ;;
+  esac
+done
+
+RUNTIME_FILES+=(
   vendor/pdfjs/legacy/build/pdf.min.js
   vendor/pdfjs/legacy/build/pdf.worker.min.js
   vendor/pdfjs/LICENSE
@@ -50,3 +58,6 @@ zip -q -X "$OUT" "${RUNTIME_FILES[@]}"
 echo "package-zip: wrote $OUT"
 unzip -p "$OUT" manifest.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version"
 echo "package-zip: ${#RUNTIME_FILES[@]} files, $(unzip -l "$OUT" | tail -1 | awk '{print $1}') bytes"
+
+# Guard: every script/style the runtime references must be inside the zip.
+node scripts/verify-zip-contents.js "$OUT"

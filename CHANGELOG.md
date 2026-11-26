@@ -42,6 +42,17 @@ channel smoke with recorded output), not green unit tests alone.
   (`.pv-hint-key`) washed out to a pale background. Both are now dark
   key-caps matching the theme tokens.
 
+### Build
+
+- `scripts/package-zip.sh` now globs `lib/pv-*.js` (excluding colocated
+  tests) instead of a hardcoded module list, and runs a new
+  `scripts/verify-zip-contents.js` guard that fails the build when any
+  script/style referenced by the manifest, html pages, or `importScripts`
+  calls is absent from the zip. The first v2.2.2 zip silently omitted
+  `lib/pv-transport.js` while `offscreen.html` referenced it — caught before
+  submission; the rebuilt zip carries all 24 runtime files and the guard
+  passes.
+
 ## v2.2.1 — 2026-11-26
 
 Operator verification round 1 (issue #15 fix wave): highlight drift fix plus
