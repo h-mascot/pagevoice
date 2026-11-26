@@ -28,16 +28,20 @@
  * is pure and unit-tested in lib/pv-queue.test.js; this file only wires it
  * to storage, messages, and playback.
  *
- * PDF import (issue #5): the popup picks the file and sends the bytes to
- * "pdfImport"; background owns the whole import (so it completes even if
+ * PDF import (issue #5): the popup or a content script transfers the file
+ * bytes to "pdfImportBegin/Chunk/End" (base64 chunks, lib/pv-transport.js —
+ * an ArrayBuffer does not survive the JSON-serializing message hop, issue
+ * #20); background owns the whole import (so it completes even if
  * the popup closes), extraction happens in the offscreen document via
- * "pdf-extract" (vendored pdf.js), and the text joins the listening queue
- * like any article. lib/pv-pdf.js is the pure, unit-tested core.
+ * "pdf-extract-begin/chunk/end" (vendored pdf.js), and the text joins the
+ * listening queue like any article. lib/pv-pdf.js is the pure, unit-tested
+ * core.
  */
 
 importScripts("lib/pv-queue.js");
 importScripts("lib/pv-pdf.js");
 importScripts("lib/pv-kokoro.js");
+importScripts("lib/pv-transport.js");
 
 const OFFSCREEN_URL = chrome.runtime.getURL("offscreen.html");
 
@@ -173,34 +177,113 @@ async function addCurrentToQueue(tabId) {
   return { ok: true, item: added };
 }
 
-// ─── PDF import (issue #5) ────────────────────────────────────────────────────
+// ─── PDF import (issue #5, transport fixed in issue #20) ──────────────────────
 //
-// The popup picks the file and hands the raw bytes here; background owns the
-// whole import so it completes even if the popup closes mid-extract. Text
-// extraction runs in the offscreen document (pdf.js vendored, lazy-loaded
-// there); the result joins the listening queue like any article and plays
-// through the standard chunking pipeline.
+// The popup (or a content script's page-level drop) reads the file and
+// transfers the bytes here in base64 CHUNKS (pdfImportBegin / pdfImportChunk
+// / pdfImportEnd — lib/pv-transport.js): chrome.runtime.sendMessage
+// JSON-serializes messages, and an ArrayBuffer payload does NOT survive
+// that hop — the v2.2.1 single-shot { buffer } transport died end-to-end on
+// both entry paths with "No PDF data received" (verification round 2).
+// background owns the whole import so it completes even if the popup closes
+// mid-extract; extraction runs in the offscreen document (pdf.js vendored,
+// lazy-loaded there) over the SAME chunked protocol; the result joins the
+// listening queue like any article. lib/pv-pdf.js is the pure core.
 
-async function extractPdfInOffscreen(buffer) {
-  await ensureOffscreenDocument();
-  return chrome.runtime
-    .sendMessage({ target: "offscreen", type: "pdf-extract", payload: { buffer } })
-    .catch(() => null); // offscreen crashed / channel gone → handled below
+// In-flight import sessions: id → { session, name, totalBytes, chunkCount }.
+// A 60 s idle GC drops sessions whose sender died before pdfImportEnd.
+const _pdfImportSessions = new Map();
+let _pdfImportSessionSeq = 0;
+const PDF_IMPORT_SESSION_MS = 60_000;
+
+function pdfSessionGc(id) {
+  const entry = _pdfImportSessions.get(id);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  _pdfImportSessions.delete(id);
 }
 
-async function importPdfToQueue(payload) {
-  const buffer = payload?.buffer;
-  const name   = typeof payload?.name === "string" ? payload.name : "";
+function pdfSessionTouch(id) {
+  const entry = _pdfImportSessions.get(id);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => pdfSessionGc(id), PDF_IMPORT_SESSION_MS);
+}
 
-  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength === 0) {
+async function handlePdfImportBegin(payload) {
+  if (!isValidPdfTransportBegin(payload)) {
     return { ok: false, error: "No PDF data received — pick the file again." };
   }
-  const sizeCheck = validatePdfSize(buffer.byteLength); // fast 50 MB guard before any work
+  const sizeCheck = validatePdfSize(payload.totalBytes); // fast 50 MB guard before any transfer
   if (!sizeCheck.ok) {
     return { ok: false, code: sizeCheck.code, error: PDF_ERRORS[sizeCheck.code] };
   }
+  const id = `pdf-import-${++_pdfImportSessionSeq}-${Date.now()}`;
+  const session = makePdfTransportSession();
+  session.expectedTotal = payload.totalBytes;
+  session.expectedCount = payload.chunkCount;
+  _pdfImportSessions.set(id, { session, name: payload.name, totalBytes: payload.totalBytes, chunkCount: payload.chunkCount, timer: null });
+  pdfSessionTouch(id);
+  return { ok: true, sessionId: id };
+}
 
-  const result = await extractPdfInOffscreen(buffer);
+function handlePdfImportChunk(payload) {
+  const entry = _pdfImportSessions.get(payload?.sessionId);
+  if (!entry) return { ok: false, error: "Import session expired — pick the file again." };
+  if (!pdfSessionAddChunk(entry.session, payload)) {
+    return { ok: false, error: "PDF data received in a bad format — pick the file again." };
+  }
+  pdfSessionTouch(payload.sessionId);
+  return { ok: true, received: entry.session.received };
+}
+
+// Extract text from PDF `bytes` (Uint8Array) in the offscreen document,
+// transferring them in base64 chunks over the same channel-safe protocol
+// (the background → offscreen hop has the same serialization semantics).
+// `name` rides along on the Begin message so the offscreen-side
+// isValidPdfTransportBegin validation (which requires it — caught by the
+// channel smoke: an anonymous Begin was rejected as invalid and every
+// import died as "load-failed") holds on BOTH hops.
+async function extractPdfInOffscreen(bytes, name) {
+  await ensureOffscreenDocument();
+  const send = (msg) => chrome.runtime.sendMessage(msg).catch(() => null);
+  const chunks = pdfTransportChunks(bytes);
+  const begin = await send({
+    target: "offscreen",
+    type: "pdf-extract-begin",
+    payload: { name, totalBytes: bytes.length, chunkCount: chunks.length },
+  });
+  if (!begin || !begin.ok || !begin.sessionId) {
+    return null; // offscreen dead / channel gone → handled below as load-failed
+  }
+  for (let k = 0; k < chunks.length; k++) {
+    const res = await send({
+      target: "offscreen",
+      type: "pdf-extract-chunk",
+      payload: { sessionId: begin.sessionId, index: k, b64: chunks[k] },
+    });
+    if (!res || !res.ok) return null;
+  }
+  return send({
+    target: "offscreen",
+    type: "pdf-extract-end",
+    payload: { sessionId: begin.sessionId },
+  }).catch(() => null);
+}
+
+async function handlePdfImportEnd(payload) {
+  const id = payload?.sessionId;
+  const entry = _pdfImportSessions.get(id);
+  if (!entry) return { ok: false, error: "Import session expired — pick the file again." };
+  const { session, name, totalBytes, chunkCount } = entry;
+
+  const bytes = pdfSessionAssemble(session, totalBytes, chunkCount);
+  pdfSessionGc(id); // transfer done — the import runs background-owned from here
+  if (!bytes) {
+    return { ok: false, error: "PDF data incomplete — pick the file again." };
+  }
+
+  const result = await extractPdfInOffscreen(bytes, name);
   if (!result) {
     return { ok: false, code: "load-failed", error: PDF_ERRORS["load-failed"] };
   }
@@ -531,11 +614,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
 
-      // ── PDF import (issue #5) ────────────────────────────────────────────
-      // payload: { buffer: ArrayBuffer, name: string }. Response: the queue
-      // item (success) or operator-facing error copy (see lib/pv-pdf.js).
-      case "pdfImport": {
-        sendResponse(await importPdfToQueue(message.payload));
+      // ── PDF import (issue #5; transport per issue #20) ──────────────────
+      // Chunked base64 protocol (lib/pv-transport.js): Begin/Chunk/End.
+      // A single { buffer: ArrayBuffer } payload does NOT survive this hop
+      // (chrome.runtime.sendMessage JSON-serializes) — that was the round-2
+      // breakage; responses: the queue item (success) or operator-facing
+      // error copy (see lib/pv-pdf.js).
+      case "pdfImportBegin": {
+        sendResponse(await handlePdfImportBegin(message.payload));
+        break;
+      }
+      case "pdfImportChunk": {
+        sendResponse(handlePdfImportChunk(message.payload));
+        break;
+      }
+      case "pdfImportEnd": {
+        sendResponse(await handlePdfImportEnd(message.payload));
         break;
       }
 

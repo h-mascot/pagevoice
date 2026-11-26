@@ -610,8 +610,12 @@ body {
   display: inline-block;
   padding: 1px 5px;
   border-radius: 4px;
-  background: #e5e7eb;
-  color: #374151;
+  /* Issue #21 (round 2): was a light #e5e7eb chip — a white block on the
+     dark popup. Now a dark key-cap matching the popup theme (#111 body,
+     #e8e8e8 text): dark surface, subtle border, light text. */
+  background: #26262c;
+  border: 1px solid #45454d;
+  color: #d6d6dc;
   font-size: 10px;
   font-weight: 600;
 }

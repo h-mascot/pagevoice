@@ -1,5 +1,47 @@
 # Changelog
 
+## v2.2.2 — 2026-11-26
+
+Operator verification round 2 (issues #19/#20/#21 fix wave). 236 tests (was
+215), all green at baseline speed. Fix method per the round-2 standing
+lesson: real-path evidence (real message-serialization semantics in CI +
+channel smoke with recorded output), not green unit tests alone.
+
+### Fixed
+
+- **PDF import broken end-to-end (#20)** — both the file-pick and the
+  page-level drop paths died with "No PDF data received — pick the file
+  again." Root cause: `chrome.runtime.sendMessage` JSON-serializes messages,
+  so the `{ buffer: ArrayBuffer }` payload arrived as a plain empty object
+  and the `instanceof ArrayBuffer` check in background failed. Pure-logic
+  unit tests never caught it because the real channel semantics were never
+  exercised. The bytes now travel as base64 STRING chunks over a
+  begin/chunk/end protocol (`lib/pv-transport.js`, 2 MiB chunks, 60 s
+  session GC) on BOTH hops (sender→background and background→offscreen);
+  new channel-semantics tests round-trip every message through
+  `JSON.parse(JSON.stringify(msg))` — the exact semantics that broke
+  v2.2.1 — and a vm smoke drives the real background.js + offscreen.js
+  routers over a JSON-serializing channel end-to-end.
+- **Highlighting regression (#19)** — the v2.2.1 long-range re-anchor
+  (`findResyncLong`) took the FIRST 12-gram occurrence with no validation;
+  on repetitive text that is routinely a wrong distant duplicate, and every
+  later sentence then mapped onto it (the highlight "jumped to the wrong
+  distant sentence" — worse than round 1). Resync now enumerates windowed +
+  long-range candidates and validates: small jumps (≤64 chars) are trusted
+  as local edits, large jumps need ≥96 chars of multi-sentence corroboration
+  (or end-of-stream), the smallest validated jump wins, backward extension
+  is bounded, and the DOM-walk fallback no longer borrows a distant
+  sentence's identity (the highlight freezes gracefully instead). When
+  nothing validates, positions stay unmapped. Regression tests reproduce
+  the round-2 failure on the old code (60-sentence substitution sweep:
+  58/60 sentences mapped to the wrong source sentence before, 0/60 after;
+  the monotone and hidden-block tests fail there too).
+- **Hotkey chip styling (#21)** — the shortcut key chips in the popup
+  (`.shortcut-hints .key`) had a near-white `#e5e7eb` background clashing
+  with the dark UI; the on-page read-from-here chip
+  (`.pv-hint-key`) washed out to a pale background. Both are now dark
+  key-caps matching the theme tokens.
+
 ## v2.2.1 — 2026-11-26
 
 Operator verification round 1 (issue #15 fix wave): highlight drift fix plus

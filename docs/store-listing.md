@@ -98,7 +98,7 @@ See PRIVACY.md in the repository. No data collection, no tracking.
 ## Post-submission checklist
 
 - [ ] Build the upload zip: `bash scripts/package-zip.sh` (run from a clean
-      checkout of the `v2.2.1` tag) → `dist/pagevoice-2.2.1.zip`
+      checkout of the `v2.2.2` tag) → `dist/pagevoice-2.2.2.zip`
 - [ ] Verify listing renders correctly in incognito preview
 - [ ] Test the "installed from store" build end-to-end (not just unpacked)
 - [ ] Mirror listing to Edge Add-ons (same Chromium package)

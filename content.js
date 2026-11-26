@@ -281,8 +281,11 @@ window.addEventListener("resize", hideReadHint, { passive: true });
 // PDF drag-drop previously worked only on the popup's queue view — on the
 // page itself the browser just navigated to the file. Now a full-viewport
 // overlay appears while a file is dragged over the page; dropping a PDF
-// sends it through the SAME background import pipeline (pdfImport) the
-// popup uses, so extraction, validation and queueing behave identically.
+// sends it through the SAME chunked background import pipeline
+// (sendPdfImportViaChannel → pdfImportBegin/Chunk/End, lib/pv-transport.js)
+// the popup uses, so extraction, validation and queueing behave identically.
+// An ArrayBuffer payload does not survive the JSON-serializing message hop
+// (issue #20, round 2) — that killed both entry paths in v2.2.1.
 // The overlay is pointer-events: none, so the drag events keep targeting
 // the page and the enter/leave counter stays stable.
 
@@ -350,23 +353,25 @@ function importDroppedPdf(file) {
   pageToast(`Reading “${file.name}”…`);
   (async () => {
     try {
-      const buffer = await file.arrayBuffer();
-      chrome.runtime.sendMessage(
-        { target: "background", type: "pdfImport", payload: { buffer, name: file.name } },
-        (res) => {
-          void chrome.runtime.lastError;
-          if (!res || chrome.runtime.lastError) {
-            pageToast("Import failed — the extension did not respond. Try again.", true);
-            return;
-          }
-          if (!res.ok) {
-            pageToast(res.error || "PDF import failed.", true);
-            return;
-          }
-          const pages = res.pages || "?";
-          pageToast(`Added “${res.item.title}” (${pages} page${pages === 1 ? "" : "s"}) to the queue ✓`);
+      // Real channel semantics: a null response means the channel itself
+      // died (extension reload) — the driver maps that to an honest error.
+      const send = async (message) => {
+        try {
+          return await chrome.runtime.sendMessage(message);
+        } catch (_) {
+          return null;
         }
-      );
+      };
+      const res = await sendPdfImportViaChannel(file, send);
+      if (!res || !res.ok) {
+        pageToast(
+          (res && res.error) || "Import failed — the extension did not respond. Try again.",
+          true
+        );
+        return;
+      }
+      const pages = res.pages || "?";
+      pageToast(`Added “${res.item.title}” (${pages} page${pages === 1 ? "" : "s"}) to the queue ✓`);
     } catch (_) {
       pageToast("Could not read the file — try again.", true);
     }
@@ -474,9 +479,19 @@ function buildHighlightSession(text, elements) {
 
   for (const [start, end] of ranges) {
     if (start >= end) continue;
+    // A walk sentence whose start maps to the source is tagged directly.
+    // When it does not (hidden DOM text, post-divergence freeze), the OLD
+    // unbounded fallback borrowed the LAST aligned source position — after
+    // an unrecoverable divergence that piled every later span onto the
+    // last good sentence (spansBySentence lists grew without bound and the
+    // highlight jumped across the page, issue #19 round 2). Now the
+    // fallback is bounded to the same-sentence edge case: a nearby aligned
+    // char within 32 positions. Otherwise the range gets NO span — the
+    // highlight freezes gracefully instead of borrowing a distant
+    // sentence's identity.
     const srcPos = alignment[start] >= 0
       ? alignment[start]
-      : nearestAlignedBefore(alignment, start);
+      : nearestAlignedBefore(alignment, start, 32);
     if (srcPos < 0) continue;
     const si = sentenceIndexAtOffset(starts, srcPos);
     if (si < 0) continue;
@@ -486,8 +501,11 @@ function buildHighlightSession(text, elements) {
   return { spansBySentence, activeSentence: -1, activeWord: -1, wordSpans: [] };
 }
 
-function nearestAlignedBefore(alignment, idx) {
-  for (let k = idx; k >= 0; k--) {
+// Nearest aligned walk position at or before idx, within `maxBack` chars.
+// Unbounded fallback was the issue #19 round-2 span-pileup mechanism.
+function nearestAlignedBefore(alignment, idx, maxBack) {
+  const floor = Math.max(0, idx - Math.max(0, maxBack));
+  for (let k = idx; k >= floor; k--) {
     if (alignment[k] >= 0) return alignment[k];
   }
   return -1;
