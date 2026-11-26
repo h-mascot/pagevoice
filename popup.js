@@ -613,10 +613,14 @@ function playQueueItem(id) {
 
 // ─── PDF import (issue #5) ───────────────────────────────────────────────────
 //
-// 📄 button or drag-drop → file → size guard → ArrayBuffer → background
-// "pdfImport". Background owns the rest (offscreen pdf.js extraction, queue
-// add, broadcastQueue), so the import survives this popup closing mid-extract;
-// the only thing living here is UI state: progress, success and error lines.
+// 📄 button or drag-drop → file → size guard → chunked base64 transfer
+// (sendPdfImportViaChannel, lib/pv-transport.js) → background
+// pdfImportBegin/Chunk/End. An ArrayBuffer payload does NOT survive
+// chrome.runtime.sendMessage (JSON-serialized — issue #20, round 2), so the
+// bytes travel as base64 chunk strings. Background owns the rest (offscreen
+// pdf.js extraction, queue add, broadcastQueue), so the import survives this
+// popup closing mid-extract; the only thing living here is UI state:
+// progress, success and error lines.
 
 const PDF_MAX_BYTES_POPUP = 50 * 1024 * 1024;
 
@@ -648,30 +652,32 @@ async function importPdfFile(file) {
   pdfImportBtn.disabled = true;
   setPdfStatus(`Reading “${file.name}”…`);
   try {
-    const buffer = await file.arrayBuffer();
-    setPdfStatus("Extracting text…");
-    chrome.runtime.sendMessage(
-      { target: "background", type: "pdfImport", payload: { buffer, name: file.name } },
-      (res) => {
-        pdfImport.importing = false;
-        pdfImportBtn.disabled = false;
-        if (chrome.runtime.lastError || !res) {
-          setPdfStatus("Import failed — the extension did not respond. Try again.", "error");
-          return;
-        }
-        if (!res.ok) {
-          setPdfStatus(res.error || "PDF import failed.", "error");
-          return;
-        }
-        const pages = res.pages || "?";
-        setPdfStatus(`Added “${res.item.title}” (${pages} page${pages === 1 ? "" : "s"}) to the queue ✓`, "done");
-        renderQueue(); // the queueUpdate broadcast also refreshes; this covers the race
+    setPdfStatus("Importing…");
+    // Real channel semantics: a null response means the channel itself died
+    // (extension reload) — the driver maps that to an honest operator error.
+    const send = async (message) => {
+      try {
+        return await chrome.runtime.sendMessage(message);
+      } catch (_) {
+        return null;
       }
-    );
+    };
+    const res = await sendPdfImportViaChannel(file, send);
+    if (!res || !res.ok) {
+      setPdfStatus(
+        (res && res.error) || "Import failed — the extension did not respond. Try again.",
+        "error"
+      );
+      return;
+    }
+    const pages = res.pages || "?";
+    setPdfStatus(`Added “${res.item.title}” (${pages} page${pages === 1 ? "" : "s"}) to the queue ✓`, "done");
+    renderQueue(); // the queueUpdate broadcast also refreshes; this covers the race
   } catch (_) {
+    setPdfStatus("Could not read the file — try again.", "error");
+  } finally {
     pdfImport.importing = false;
     pdfImportBtn.disabled = false;
-    setPdfStatus("Could not read the file — try again.", "error");
   }
 }
 

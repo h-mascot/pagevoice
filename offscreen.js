@@ -31,8 +31,12 @@ let currentStatus   = "";
 
 // ─── PDF import — vendored pdf.js, lazy-loaded (issue #5) ────────────────────
 //
-// background sends { target: "offscreen", type: "pdf-extract", payload:
-// { buffer } }; extraction logic itself is lib/pv-pdf.js (unit-tested in
+// background transfers the PDF bytes here in base64 CHUNKS (pdf-extract-begin
+// / pdf-extract-chunk / pdf-extract-end — the same lib/pv-transport.js
+// protocol the popup/content senders use, because this hop JSON-serializes
+// messages exactly like the sender→background hop: an ArrayBuffer payload
+// does not survive it, which is how v2.2.1's { buffer } transfer died);
+// extraction logic itself is lib/pv-pdf.js (unit-tested in
 // Node against the same vendored files). Load order matters: the worker
 // script must define globalThis.pdfjsWorker BEFORE pdf.min.js evaluates —
 // pdf.js then runs its worker on the main thread of this document, so no
@@ -73,14 +77,21 @@ function ensurePdfJs() {
   return _pdfJsLoad;
 }
 
-async function extractPdfOffscreen(buffer) {
+// In-flight extraction sessions (issue #20 chunked transport):
+// id → { session, timer }. A 60 s idle GC drops sessions whose sender
+// (the background import flow) died before pdf-extract-end.
+const _pdfExtractSessions = new Map();
+let _pdfExtractSeq = 0;
+const PDF_EXTRACT_SESSION_MS = 60_000;
+
+async function extractPdfOffscreen(data) {
   let lib;
   try {
     lib = await ensurePdfJs();
   } catch (_) {
     return { ok: false, code: "load-failed", error: PDF_ERRORS["load-failed"] };
   }
-  return extractPdfText(lib, buffer, {
+  return extractPdfText(lib, data, {
     onProgress: (page, total) => {
       // Best-effort progress for the popup (it may already be closed —
       // background completes the import either way).
@@ -149,17 +160,61 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         break;
       }
 
-      // ── PDF text extraction (issue #5) ─────────────────────────────────
-      // Synchronous-response contract: background awaits the final result
-      // here (the channel stays open — `return true` below); per-page
-      // progress is pushed separately as pdfImportProgress → popup.
-      case "pdf-extract": {
-        const buffer = message.payload?.buffer;
-        if (!(buffer instanceof ArrayBuffer)) {
+      // ── PDF text extraction (issue #5; chunked transport issue #20) ────
+      // background transfers the bytes in base64 chunks over the same
+      // begin/chunk/end protocol the popup/content senders use (this hop
+      // JSON-serializes messages the same way — an ArrayBuffer does not
+      // survive it). Assembled bytes are byte-verified before extraction.
+      // Per-page progress is pushed separately as pdfImportProgress → popup.
+      case "pdf-extract-begin": {
+        if (!isValidPdfTransportBegin(message.payload)) {
           sendResponse({ ok: false, code: "invalid", error: "No PDF data received." });
           break;
         }
-        sendResponse(await extractPdfOffscreen(buffer));
+        const id = `pdf-extract-${++_pdfExtractSeq}-${Date.now()}`;
+        const s = makePdfTransportSession();
+        s.expectedTotal = message.payload.totalBytes;
+        s.expectedCount = message.payload.chunkCount;
+        _pdfExtractSessions.set(id, {
+          session: s,
+          timer: setTimeout(() => _pdfExtractSessions.delete(id), PDF_EXTRACT_SESSION_MS),
+        });
+        sendResponse({ ok: true, sessionId: id });
+        break;
+      }
+      case "pdf-extract-chunk": {
+        const entry = _pdfExtractSessions.get(message.payload?.sessionId);
+        if (!entry) {
+          sendResponse({ ok: false, error: "extraction session expired" });
+          break;
+        }
+        if (!pdfSessionAddChunk(entry.session, message.payload)) {
+          clearTimeout(entry.timer);
+          _pdfExtractSessions.delete(message.payload.sessionId); // bad chunk — drop the session
+          sendResponse({ ok: false, error: "bad chunk" });
+          break;
+        }
+        sendResponse({ ok: true, received: entry.session.received });
+        break;
+      }
+      case "pdf-extract-end": {
+        const entry = _pdfExtractSessions.get(message.payload?.sessionId);
+        if (!entry) {
+          sendResponse({ ok: false, code: "invalid", error: "No PDF data received." });
+          break;
+        }
+        clearTimeout(entry.timer);
+        _pdfExtractSessions.delete(message.payload.sessionId);
+        const bytes = pdfSessionAssemble(
+          entry.session,
+          entry.session.expectedTotal,
+          entry.session.expectedCount
+        );
+        if (!bytes) {
+          sendResponse({ ok: false, code: "invalid", error: "No PDF data received." });
+          break;
+        }
+        sendResponse(await extractPdfOffscreen(bytes));
         break;
       }
 

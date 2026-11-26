@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PageVoice",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Read articles aloud — Edge TTS, OpenAI, ElevenLabs, or local TTS",
   "permissions": ["storage", "activeTab", "scripting", "offscreen", "tabs", "contextMenus"],
   "host_permissions": [
@@ -26,7 +26,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["lib/pv-utils.js", "lib/pv-highlight.js", "lib/pv-shortcuts.js", "content.js"],
+      "js": ["lib/pv-utils.js", "lib/pv-highlight.js", "lib/pv-shortcuts.js", "lib/pv-transport.js", "content.js"],
       "css": ["content-player.css"]
     }
   ],
