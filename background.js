@@ -398,6 +398,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "resume": { await resumePlayback();               sendResponse({ ok: true }); break; }
       case "stop":   { await stopPlayback();                 sendResponse({ ok: true }); break; }
 
+      // ── Read-from-here from the in-page hint bubble (issue #16) ─────────
+      // The content script's clickable hint sends this; sender.tab is the
+      // page it came from — same handler as the command and context menu.
+      case "readFromHereShortcut": {
+        if (sender?.tab && typeof sender.tab.id === "number") {
+          await handleReadFromHere(sender.tab);
+          sendResponse({ ok: true });
+        } else {
+          sendResponse({ ok: false, error: "No tab context." });
+        }
+        break;
+      }
+
       // ── State update from offscreen ──────────────────────────────────────
       case "stateUpdate": {
         const updated = await saveState(message.payload);
@@ -609,6 +622,14 @@ chrome.commands.onCommand.addListener((command) => {
       case "save-to-queue": {
         const tab = await activeTab();
         if (tab) await addCurrentToQueue(tab.id);
+        break;
+      }
+      // Issue #16: read-from-here needed a discoverable trigger beyond the
+      // right-click context menu. Same handler as the menu + the in-page
+      // hint bubble's click — selection first, else the clicked paragraph.
+      case "read-from-here": {
+        const tab = await activeTab();
+        if (tab) await handleReadFromHere(tab);
         break;
       }
       default: break;

@@ -96,12 +96,15 @@ off.
 ### PDF import
 
 In the queue view, click **📄** or drag a PDF file onto the queue to add it
-as a listening item. PDFs with a real text layer work best; encrypted or
-scanned-only PDFs produce a clear error explaining what to try instead.
+as a listening item — or simply drop the PDF onto the page you're reading:
+an overlay confirms the target, the import runs in the background, and a
+small toast confirms when the item is queued. PDFs with a real text layer
+work best; encrypted or scanned-only PDFs produce a clear error explaining
+what to try instead.
 
 ### Keyboard shortcuts
 
-PageVoice registers three global shortcuts that work even when the popup
+PageVoice registers four global shortcuts that work even when the popup
 is closed (playback lives in an offscreen document, so audio survives):
 
 | Action | Default shortcut |
@@ -109,6 +112,7 @@ is closed (playback lives in an offscreen document, so audio survives):
 | Play / Pause | `Alt+Shift+P` |
 | Stop | `Alt+Shift+S` |
 | Save current page to the listening queue | `Alt+Shift+Q` |
+| Read from here | `Alt+Shift+R` |
 
 Play/Pause is a toggle: from a stopped state it starts reading the current
 page. Rebind any shortcut at `chrome://extensions/shortcuts` (the "Keyboard
@@ -117,10 +121,12 @@ clashes with other extensions are resolved there too.
 
 ### Read from here
 
-Don't want to start at the top? Right-click anywhere in the paragraph you
-want to start from and choose **Read from here** — or select some text
-first and right-click inside the selection; playback then starts at the
-sentence your selection begins at. Works together with the floating
+Don't want to start at the top? Select some text and a small
+**▶ Read from here** bubble appears under the selection — click it or press
+`Alt+Shift+R` (the shortcut works from the paragraph you last right-clicked
+too, even without a selection). Or right-click anywhere in the paragraph you
+want to start from and choose **Read from here**; playback then starts at
+the sentence your selection begins at. Works together with the floating
 mini-player: it appears on the page with the usual controls.
 
 ### API keys (OpenAI / ElevenLabs)

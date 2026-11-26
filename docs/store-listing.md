@@ -44,13 +44,14 @@ FEATURES
   auto-advance and per-item resume
 • Word highlighting (opt-in) — follow along karaoke-style, in sync across
   engines and speeds
-• PDF import — read local PDFs aloud right in the queue (text-layer PDFs)
+• PDF import — read local PDFs aloud right in the queue (text-layer PDFs);
+  drop a PDF onto the page itself, or onto the queue view
 • Playback that survives closing the popup (offscreen audio)
 • Keyboard shortcuts — play/pause, stop, and save-to-queue without opening
   the popup (defaults Alt+Shift+P / S / Q, rebindable at
   chrome://extensions/shortcuts)
-• Read from here — right-click a paragraph, or select text and right-click,
-  to start listening at that point
+• Read from here — select text and use the hint bubble or Alt+Shift+R, or
+  right-click a paragraph, to start listening at that point
 • Speed control from 0.5x to 3x
 • Floating mini-player on the page
 • Settings and voices persist across sessions
@@ -97,7 +98,7 @@ See PRIVACY.md in the repository. No data collection, no tracking.
 ## Post-submission checklist
 
 - [ ] Build the upload zip: `bash scripts/package-zip.sh` (run from a clean
-      checkout of the `v2.2.0` tag) → `dist/pagevoice-2.2.0.zip`
+      checkout of the `v2.2.1` tag) → `dist/pagevoice-2.2.1.zip`
 - [ ] Verify listing renders correctly in incognito preview
 - [ ] Test the "installed from store" build end-to-end (not just unpacked)
 - [ ] Mirror listing to Edge Add-ons (same Chromium package)

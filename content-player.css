@@ -169,3 +169,80 @@
   background-color: rgba(255, 183, 77, 0.55) !important;
   border-radius: 2px;
 }
+
+/* ─── Read-from-here hint bubble (issue #16) ──────────────────────────── */
+
+#__pagevoice_read_hint__ {
+  position: fixed;
+  z-index: 2147483647; /* top of every stacking context (same as player) */
+  background: #1f2937;
+  color: #f9fafb;
+  font: 500 13px/1.2 system-ui, -apple-system, sans-serif;
+  padding: 7px 10px;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+#__pagevoice_read_hint__ .pv-hint-key {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 11px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+/* ─── Page-level PDF drop overlay (issue #17) ─────────────────────────── */
+
+#__pagevoice_pdf_drop__ {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  background: rgba(29, 78, 216, 0.18);
+  border: 3px dashed #3b82f6;
+  box-sizing: border-box;
+  pointer-events: none; /* drag events must keep targeting the page */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#__pagevoice_pdf_drop__ .pv-drop-card {
+  background: #ffffff;
+  color: #111827;
+  font: 14px/1.5 system-ui, -apple-system, sans-serif;
+  text-align: center;
+  padding: 28px 36px;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  max-width: 340px;
+}
+
+#__pagevoice_pdf_drop__ .pv-drop-card span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+/* ─── In-page toast (PDF import feedback, issue #17) ───────────────────── */
+
+#__pagevoice_toast__ {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  background: #111827;
+  color: #f9fafb;
+  font: 500 13px/1.4 system-ui, -apple-system, sans-serif;
+  padding: 10px 14px;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  max-width: 320px;
+}
+
+#__pagevoice_toast__.pv-toast-error {
+  background: #7f1d1d;
+}

@@ -1,5 +1,40 @@
 # Changelog
 
+## v2.2.1 — 2026-11-26
+
+Operator verification round 1 (issue #15 fix wave): highlight drift fix plus
+two discoverability fixes. 215 tests (was 193), all green at baseline speed.
+
+### Fixed
+
+- **Highlight drift (#15)** — highlighting now tracks the spoken word within
+  one word across speeds 0.5x–3x on both engines, and lands on the right
+  sentence. Three mechanisms fixed: (1) Web Speech `onboundary` reports
+  `charIndex` into the RAW sentence text — it was being fed to the
+  normalized-position word counter, drifting forward past collapsed
+  whitespace (new `wordOrdinalAtRawChar`); (2) Edge TTS WordBoundary events
+  don't map 1:1 to whitespace tokens ("1,000" → "one" + "thousand") — the
+  ordinal-based mapping shifted for the rest of the chunk (new
+  position-matching `mapWordEventsToCharOffsets` +
+  `charOffsetToSentenceWord`); (3) Kokoro estimates the word from the audio
+  fraction — over a 2500-char multi-sentence chunk that drifted by whole
+  sentences (Kokoro now chunks per sentence via `buildSentenceChunks`/
+  `buildEngineChunks`). The DOM-walk↔innerText alignment also survives
+  >512-char hidden-text insertions (cookie banners, collapsed accordions)
+  instead of orphaning every sentence after them, and rejects false resync
+  anchors on repetitive sentence tails. Regression tests written first and
+  verified failing on the drift before the fix landed.
+
+### Added
+
+- **Read-from-here shortcut + visible hint (#16)** — `Alt+Shift+R` command
+  (manifest, same handler as the context menu), a clickable
+  **▶ Read from here** bubble under any selection, shortcut hints in the
+  popup, and updated docs.
+- **Page-level PDF drop (#17)** — dropping a PDF anywhere on the page shows
+  a full-viewport overlay and imports through the same background pipeline
+  as the queue view; in-page toast feedback; popup path unchanged.
+
 ## v2.2.0 — 2026-11-25
 
 Phase 1 "daily-habit" release: five features, each shipped as its own PR with
