@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.2.3 — 2026-11-27
+
+Operator contribution (fikayo1, direct commit 2619ad9): fixed word
+highlighting and playback speed on the real audio path, with 24 new tests
+(content.test.js, offscreen.test.js). Suite 241/241.
+
+### Fixed
+
+- **Playback speed was not applied to cloud/local audio** — chunks were
+  fetched at the speaking rate but played at 1.0x. Now fetched at 1x and
+  played at `currentAudio.playbackRate` with a live `setSpeed` handler
+  (clamped 0.5–3), and the highlight timer respects the active speed.
+- **Highlight drift after text-node splits** — sentence-wrapping cursors
+  were per-sentence, so a later sentence re-entering a node an earlier
+  sentence had split mapped to the wrong offsets. Cursors are now
+  session-scoped.
+- Stale playback callbacks guarded by `localPlaybackId`; Edge TTS
+  provider loss now reports "connection lost, press play to retry"
+  instead of stalling silently.
+
 ## v2.2.2 — 2026-11-26
 
 Operator verification round 2 (issues #19/#20/#21 fix wave). 236 tests (was

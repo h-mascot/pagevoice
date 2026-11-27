@@ -21,11 +21,11 @@ analytics, no telemetry — text goes only to the engine the user picks.
 ## Roadmap
 
 ### Phase 1 — make the extension a daily habit
-- [ ] Listening queue: save articles to a playlist, play through like a podcast
-- [ ] Word-level highlighting while reading (toggleable)
-- [ ] PDF / EPUB import
-- [ ] Keyboard shortcuts + "read from here"
-- [ ] Local voice polish: one-click Kokoro setup, auto-detect, clear status
+- [x] Listening queue: save articles to a playlist, play through like a podcast
+- [x] Word-level highlighting while reading (toggleable)
+- [x] PDF import (EPUB deferred — see Phase 2)
+- [x] Keyboard shortcuts + "read from here"
+- [x] Local voice polish: one-click Kokoro setup, auto-detect, clear status
 
 ### Phase 2 — beyond the browser
 - [ ] macOS app: select-to-read hotkey in any app (accessibility API)
