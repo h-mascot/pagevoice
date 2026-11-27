@@ -395,8 +395,10 @@ kokoroCheckBtn.addEventListener("click", () => {
 // ─── Speed ────────────────────────────────────────────────────────────────────
 
 speedInput.addEventListener("input", () => {
-  speedValue.textContent = parseFloat(speedInput.value).toFixed(1) + "x";
-  chrome.storage.sync.set({ speed: parseFloat(speedInput.value) });
+  speedValue.textContent = parseFloat(speedInput.value) + "x";
+  chrome.runtime.sendMessage({
+    target: "background", type: "setSpeed", payload: { speed: parseFloat(speedInput.value) },
+  }).catch(() => {});
 });
 
 // ─── Word Highlighting toggle (issue #4) ──────────────────────────────────────

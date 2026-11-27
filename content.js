@@ -183,8 +183,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // Turning highlighting off mid-playback clears it immediately (opt-out).
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "sync" || !changes.highlightEnabled) return;
-  if (!changes.highlightEnabled.newValue) clearHighlight();
+  if (area !== "sync") return;
+  if (changes.highlightEnabled && !changes.highlightEnabled.newValue) clearHighlight();
+  if (changes.speed) updatePlayerSpeed(changes.speed.newValue);
 });
 
 // ─── Read-from-here hint bubble (issue #16) ──────────────────────────────────
@@ -466,6 +467,7 @@ function buildHighlightSession(text, elements) {
   const alignment = alignCharStreams(source, walk.text);
   const spansBySentence = new Map();
   const starts = sentenceStartOffsets(sentences);
+  const cursors = new Map();
 
   // Char ranges of walk sentences within walk.text (walk.text is the
   // normalized stream, so sentences joined with " " reproduce it exactly).
@@ -495,7 +497,7 @@ function buildHighlightSession(text, elements) {
     if (srcPos < 0) continue;
     const si = sentenceIndexAtOffset(starts, srcPos);
     if (si < 0) continue;
-    wrapWalkRange(walk, start, end, si, spansBySentence);
+    wrapWalkRange(walk, start, end, si, spansBySentence, cursors);
   }
 
   return { spansBySentence, activeSentence: -1, activeWord: -1, wordSpans: [] };
@@ -595,7 +597,7 @@ function buildWalkMap(nodes) {
 // Wrap walk-text chars [start, end) in sentence spans tagged with si.
 // Groups consecutive chars by text node and splits each node with
 // splitText() — layout-safe by construction.
-function wrapWalkRange(walk, start, end, si, spansBySentence) {
+function wrapWalkRange(walk, start, end, si, spansBySentence, cursors) {
   const groups = [];
   for (let k = start; k < end; k++) {
     const entry = walk.map[k];
@@ -608,9 +610,8 @@ function wrapWalkRange(walk, start, end, si, spansBySentence) {
     }
   }
 
-  // Per original node: the node currently holding its remaining text and
-  // how many original chars were already split off.
-  const cursors = new Map();
+  // Cursors live for the whole session: later sentences can share the
+  // original text node after an earlier sentence split it.
   const wrapped = [];
 
   for (const g of groups) {
@@ -809,6 +810,7 @@ function injectPlayer() {
       <div class="pv-controls">
         <button class="pv-btn pv-play" title="Play/Pause">▶</button>
         <button class="pv-btn pv-stop" title="Stop">⏹</button>
+        <button class="pv-btn pv-speed" title="Increase reading speed">1×</button>
         <button class="pv-btn pv-queue" title="Save to queue">＋</button>
         <button class="pv-btn pv-close" title="Close">✕</button>
       </div>
@@ -817,6 +819,16 @@ function injectPlayer() {
 
   document.body.appendChild(playerEl);
   playerVisible = true;
+  chrome.storage.sync.get("speed").then((saved) => updatePlayerSpeed(saved.speed)).catch(() => {});
+
+  playerEl.querySelector(".pv-speed").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const current = Number(playerEl.querySelector(".pv-speed").dataset.speed) || 1;
+    const choices = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+    const next = choices.find((rate) => rate > current + 0.01) || choices[0];
+    updatePlayerSpeed(next);
+    chrome.runtime.sendMessage({ target: "background", type: "setSpeed", payload: { speed: next } }).catch(() => {});
+  });
 
   playerEl.querySelector(".pv-stop").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -849,6 +861,16 @@ function injectPlayer() {
   playerEl.addEventListener("mousedown", onDragStart);
   document.addEventListener("mousemove", onDragMove);
   document.addEventListener("mouseup",   onDragEnd);
+}
+
+function updatePlayerSpeed(speed) {
+  if (!playerEl) return;
+  const button = playerEl.querySelector(".pv-speed");
+  if (!button) return;
+  const rate = Number(speed) || 1;
+  button.dataset.speed = String(rate);
+  button.textContent = `${rate}×`;
+  button.title = `Reading speed ${rate}× — click to increase`;
 }
 
 function updatePlayer(state, chunk, totalChunks) {

@@ -480,6 +480,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "pause":  { await pausePlayback();                sendResponse({ ok: true }); break; }
       case "resume": { await resumePlayback();               sendResponse({ ok: true }); break; }
       case "stop":   { await stopPlayback();                 sendResponse({ ok: true }); break; }
+      case "setSpeed": {
+        const speed = Number(message.payload?.speed);
+        if (!Number.isFinite(speed) || speed < 0.5 || speed > 3) {
+          sendResponse({ ok: false });
+          break;
+        }
+        await chrome.storage.sync.set({ speed });
+        if (_state.state === "playing" || _state.state === "paused") {
+          chrome.runtime.sendMessage({ target: "offscreen", type: "setSpeed", payload: { speed } }).catch(() => {});
+        }
+        sendResponse({ ok: true });
+        break;
+      }
 
       // ── Read-from-here from the in-page hint bubble (issue #16) ─────────
       // The content script's clickable hint sends this; sender.tab is the

@@ -10,7 +10,7 @@
   bottom: 20px;
   right: 20px;
   z-index: 2147483647; /* top of every stacking context */
-  width: 210px;
+  width: 252px;
   background: rgba(15, 15, 15, 0.92);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -139,6 +139,13 @@
 /* Save-to-queue button (listening queue, issue #3) */
 #__pagevoice_player__ .pv-queue {
   font-size: 15px;
+}
+
+#__pagevoice_player__ .pv-speed {
+  width: 38px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 #__pagevoice_player__ .pv-queue:hover {

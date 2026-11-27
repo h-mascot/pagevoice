@@ -28,6 +28,8 @@ let isStopped       = false;
 let isPaused        = false;
 let currentState    = "stopped";
 let currentStatus   = "";
+let playbackSpeed   = 1;
+let localHighlightTimer = null;
 
 // ─── PDF import — vendored pdf.js, lazy-loaded (issue #5) ────────────────────
 //
@@ -115,8 +117,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "play": {
         isStopped = false;
         isPaused  = false;
+        localPlaybackId++;
         resetHighlight(); // a fresh play re-emits highlight events from the top
         const { text, engine, voice, speed, apiKey } = message.payload;
+        playbackSpeed = Number(speed) || 1;
         // Listening-queue resume: 0-based index of the first chunk to play.
         const startChunk = Number.isFinite(message.payload?.startChunk)
           ? message.payload.startChunk
@@ -154,9 +158,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       case "stop": {
         isStopped = true;
+        localPlaybackId++;
+        if (localHighlightTimer) clearInterval(localHighlightTimer);
+        localHighlightTimer = null;
         if (currentAudio) { currentAudio.pause(); currentAudio = null; }
         if (typeof speechSynthesis !== "undefined") { speechSynthesis.cancel(); }
         sendResponse({ ok: true });
+        break;
+      }
+
+      case "setSpeed": {
+        const rate = Number(message.payload?.speed);
+        if (Number.isFinite(rate) && rate >= 0.5 && rate <= 3) {
+          playbackSpeed = rate;
+          if (currentAudio) currentAudio.playbackRate = rate;
+          sendResponse({ ok: true });
+        } else {
+          sendResponse({ ok: false });
+        }
         break;
       }
 
@@ -602,9 +621,9 @@ function edgeTTSChunkViaBing(voiceName, text, speedRate) {
 
 async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
   const voice  = voiceName || "en-GB-SoniaNeural";
-  const spd    = speed || 1.0;
   const chunks = buildEngineChunks(text, "edge"); // single source shared with read-from-here (issue #15)
   const startAt = clampStartIndex(startChunk, chunks.length);
+  let provider = null;
 
   for (let i = startAt; i < chunks.length; i++) {
     if (isStopped) return;
@@ -618,22 +637,33 @@ async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
 
     try {
       // Try Bing WebSocket first (best quality, word-boundary metadata)
-      const { blob, wordEvents } = await edgeTTSChunkViaBing(voice, chunks[i].text, spd);
+      if (provider === "google") throw new Error("Continue with Google TTS");
+      const { blob, wordEvents } = await edgeTTSChunkViaBing(voice, chunks[i].text, 1);
       if (isStopped) return;
+      provider = "bing";
       reportState("playing", `Playing… ${i + 1}/${chunks.length}`, {
         chunk: i + 1, totalChunks: chunks.length, engine: "edge",
       });
-      await playAudioBlob(blob, 1.0, makeHighlightTracker("edge", chunks[i], wordEvents));
+      await playAudioBlob(blob, playbackSpeed, makeHighlightTracker("edge", chunks[i], wordEvents));
       while (isPaused && !isStopped) { await sleep(100); }
     } catch (bingErr) {
+      if (provider === "bing") {
+        reportState("stopped", "Edge TTS connection lost. Press play to retry.");
+        return;
+      }
       try {
         // Fallback: Google Translate TTS (free, no auth) — no word metadata,
         // so highlighting falls back to proportional estimation.
         const blob = await edgeTTSChunkViaGoogle(voice, chunks[i].text);
         if (isStopped) return;
-        await playAudioBlob(blob, spd, makeHighlightTracker("edge", chunks[i], null));
+        provider = "google";
+        await playAudioBlob(blob, playbackSpeed, makeHighlightTracker("edge", chunks[i], null));
         while (isPaused && !isStopped) { await sleep(100); }
       } catch (googleErr) {
+        if (provider === "google") {
+          reportState("stopped", "Google TTS connection lost. Press play to retry.");
+          return;
+        }
         // Last resort: Browser Local TTS
         if (!isStopped) {
           reportState("playing", "Network TTS unavailable, using Browser TTS…", {
@@ -643,7 +673,7 @@ async function speakWithEdgeTTS(text, voiceName, speed, startChunk = 0) {
           });
           speakWithLocalTTS(
             chunks.slice(i).map((c) => c.text).join(" "),
-            null, spd, 0, chunks[i].sentenceStart
+            null, playbackSpeed, 0, chunks[i].sentenceStart
           );
         }
         return;
@@ -689,7 +719,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
           model: "tts-1",
           input: chunks[i].text,
           voice: effectiveVoice,
-          speed: clampAudioRate(speed),
+          speed: 1,
         }),
       });
 
@@ -705,7 +735,7 @@ async function speakWithOpenAI(text, voice, speed, apiKey, startChunk = 0) {
         chunk: i + 1, totalChunks: chunks.length, engine: "openai",
       });
 
-      await playAudioBlob(blob, 1.0, makeHighlightTracker("openai", chunks[i], null));
+      await playAudioBlob(blob, playbackSpeed, makeHighlightTracker("openai", chunks[i], null));
 
       while (isPaused && !isStopped) { await sleep(100); }
     } catch (err) {
@@ -774,7 +804,7 @@ async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
         chunk: i + 1, totalChunks: chunks.length, engine: "elevenlabs",
       });
 
-      await playAudioBlob(blob, speed || 1.0, makeHighlightTracker("elevenlabs", chunks[i], null));
+      await playAudioBlob(blob, playbackSpeed, makeHighlightTracker("elevenlabs", chunks[i], null));
 
       while (isPaused && !isStopped) { await sleep(100); }
     } catch (err) {
@@ -797,13 +827,42 @@ async function speakWithElevenLabs(text, voice, speed, apiKey, startChunk = 0) {
 // speakWithEdgeTTS, where playback resumes mid-article). Sentence-level
 // highlight is exact (one utterance = one sentence); word-level uses
 // utterance.onboundary where the platform fires it.
-function speakWithLocalTTS(text, voiceName, speed, startChunk = 0, sentenceBase = 0) {
+let localPlaybackId = 0;
+
+function localVoicesReady() {
+  const voices = speechSynthesis.getVoices();
+  if (voices.length) return Promise.resolve(voices);
+  return new Promise((resolve) => {
+    const ready = () => {
+      const loaded = speechSynthesis.getVoices();
+      if (loaded.length) finish(loaded);
+    };
+    const finish = (loaded) => {
+      clearTimeout(timer);
+      speechSynthesis.removeEventListener("voiceschanged", ready);
+      resolve(loaded);
+    };
+    const timer = setTimeout(() => finish(speechSynthesis.getVoices()), 2000);
+    speechSynthesis.addEventListener("voiceschanged", ready);
+    ready();
+  });
+}
+
+async function speakWithLocalTTS(text, voiceName, speed, startChunk = 0, sentenceBase = 0) {
   if (typeof speechSynthesis === "undefined") {
     reportState("stopped", "Speech synthesis unavailable");
     return;
   }
 
   speechSynthesis.cancel();
+  playbackSpeed = Number(speed) || playbackSpeed;
+  if (localHighlightTimer) clearInterval(localHighlightTimer);
+  localHighlightTimer = null;
+  const playbackId = ++localPlaybackId;
+  const voices = await localVoicesReady();
+  if (isStopped || playbackId !== localPlaybackId) return;
+  const selectedVoice = voices.find((v) => v.name === voiceName) ||
+    voices.find((v) => v.default) || voices[0] || null;
 
   const sentences = splitIntoSentences(text);
   const startAt   = clampStartIndex(startChunk, sentences.length);
@@ -821,30 +880,57 @@ function speakWithLocalTTS(text, voiceName, speed, startChunk = 0, sentenceBase 
       return;
     }
 
-    const utterance  = new SpeechSynthesisUtterance(sentences[index]);
-    utterance.rate   = speed || 1.0;
+    const sentenceIndex = index;
+    const utterance  = new SpeechSynthesisUtterance(sentences[sentenceIndex]);
+    utterance.rate   = playbackSpeed;
 
-    if (voiceName) {
-      const voices = speechSynthesis.getVoices();
-      const match  = voices.find((v) => v.name === voiceName);
-      if (match) utterance.voice = match;
-    }
+    if (selectedVoice) utterance.voice = selectedVoice;
 
-    reportHighlight("local", { sentenceStart: sentenceBase }, index, 0);
+    reportHighlight("local", { sentenceStart: sentenceBase }, sentenceIndex, 0);
+
+    let elapsedMs = 0;
+    let lastTick = 0;
+    let lastBoundaryAt = 0;
+    let timer = null;
+    utterance.onstart = () => {
+      lastTick = Date.now();
+      lastBoundaryAt = lastTick;
+      const sentence = sentences[sentenceIndex];
+      const estimatedMs = Math.max(600, countWords(sentence) * 350 / utterance.rate);
+      timer = setInterval(() => {
+        const now = Date.now();
+        if (isStopped || playbackId !== localPlaybackId || sentenceIndex !== index) {
+          clearInterval(timer);
+          if (localHighlightTimer === timer) localHighlightTimer = null;
+          return;
+        }
+        if (!isPaused) elapsedMs += now - lastTick;
+        lastTick = now;
+        if (isPaused || now - lastBoundaryAt < Math.max(350, 700 / utterance.rate)) return;
+        const fraction = Math.min(0.99, elapsedMs / estimatedMs);
+        reportHighlight("local", { sentenceStart: sentenceBase }, sentenceIndex,
+          wordOrdinalFromFraction(sentence, fraction));
+      }, 100);
+      localHighlightTimer = timer;
+    };
 
     utterance.onboundary = (e) => {
-      if (isStopped) return;
+      if (isStopped || playbackId !== localPlaybackId || sentenceIndex !== index) return;
       if (e.name && e.name !== "word") return;
       if (typeof e.charIndex !== "number") return;
       // charIndex is into the RAW sentence string (original whitespace
       // runs). Counting on the raw text is correct by construction; the
       // normalized-position path shifts forward past multi-whitespace and
       // the highlight runs ahead of the audio (issue #15).
-      const ordinal = wordOrdinalAtRawChar(sentences[index], e.charIndex);
-      reportHighlight("local", { sentenceStart: sentenceBase }, index, ordinal);
+      const ordinal = wordOrdinalAtRawChar(sentences[sentenceIndex], e.charIndex);
+      lastBoundaryAt = Date.now();
+      reportHighlight("local", { sentenceStart: sentenceBase }, sentenceIndex, ordinal);
     };
 
     utterance.onend = () => {
+      if (timer) clearInterval(timer);
+      if (localHighlightTimer === timer) localHighlightTimer = null;
+      if (isStopped || playbackId !== localPlaybackId || sentenceIndex !== index) return;
       index++;
       if (!isStopped) {
         reportState("playing", `Reading…`, {
@@ -857,6 +943,8 @@ function speakWithLocalTTS(text, voiceName, speed, startChunk = 0, sentenceBase 
     };
 
     utterance.onerror = (e) => {
+      if (timer) clearInterval(timer);
+      if (localHighlightTimer === timer) localHighlightTimer = null;
       if (!isStopped && e.error !== "interrupted") {
         reportState("stopped", `Speech error: ${e.error}`);
       }
@@ -880,7 +968,6 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
   // so the tracker estimates the word from the audio fraction — per-
   // sentence chunks keep the estimate inside the sentence actually playing.
   const chunks = buildEngineChunks(text, "kokoro");
-  const safeSpeed = clampKokoroSpeed(speedRate);
   const startAt = clampStartIndex(startChunk, chunks.length);
 
   // Empty text: nothing to synthesize — same finish contract as every
@@ -918,7 +1005,7 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
       const res = await fetchWithTimeout(`${KOKORO_BASE_URL}/v1/text-to-speech/${effectiveVoice}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: chunks[i].text, speed: safeSpeed }),
+        body: JSON.stringify({ text: chunks[i].text, speed: 1 }),
       }, KOKORO_REQUEST_TIMEOUT_MS);
 
       if (!res.ok) {
@@ -932,7 +1019,7 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
         chunk: i + 1, totalChunks: chunks.length, engine: "kokoro",
       });
 
-      await playAudioBlob(blob, speedRate, makeHighlightTracker("kokoro", chunks[i], null));
+      await playAudioBlob(blob, playbackSpeed, makeHighlightTracker("kokoro", chunks[i], null));
       if (isStopped) return;
     } catch (err) {
       if (isStopped) return;
@@ -943,7 +1030,8 @@ async function speakWithKokoro(text, voice, speedRate, startChunk = 0) {
       // with a non-blocking notice. HTTP-level errors stay honest errors.
       const failure = classifyKokoroFailure(err);
       if (shouldFallbackToBrowserLocal(failure)) {
-        fallbackFromChunk(i, failure);
+        if (i === startAt) fallbackFromChunk(i, failure);
+        else reportState("stopped", "Kokoro connection lost. Press play to retry.");
         return;
       }
 
